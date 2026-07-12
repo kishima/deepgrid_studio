@@ -58,5 +58,4 @@ DeepGrid Studio は2つの顔を持つ:
 - ホストでの `cargo clippy`(`CARGO_TARGET_DIR` 指定)が警告なしで通ること。
 - Bevy 0.15 固定。バージョン更新は独立した plan として行う(機能planに混ぜない)。
 - 素材(外部・自作生成とも)は CLAUDE.md「素材の記録ルール」に従い、
-  フリー素材であっても全件 CREDITS.md とディレクトリ README に記録し、
-  原本を tmp/ に保管する。
+  フリー素材であっても全件 CREDITS.md とディレクトリ README に記録する。
