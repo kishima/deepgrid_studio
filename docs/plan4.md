@@ -68,7 +68,7 @@ DeepGrid Studio の第4実装計画書。前提知識は [project.md](project.md
 /// plan4 で実際に参照するのは hp/mp/concentration まわりのみだが、器は全項目そろえる。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Stats {
-    pub level: u32,          // 初期レベルは 0〜99、プレイ中の最大は 255
+    pub level: u32,          // オリジナルは初期0〜99/最大255だが参考値(制限しない)
     pub max_hp: i32,
     pub max_mp: i32,
     pub attack: i32,
@@ -99,21 +99,21 @@ pub enum GrowthType { Average, EarlyBloomer, LateBloomer, Genius, Talentless }
 
 /// プロフィール(dandan_spec_things_editor.md「名前・プロフィール項目」)。
 /// 感情移入のための項目群で、plan4 でゲームロジックには使わない。
-/// 文字数などの上限はオリジナル準拠の初期値だが LimitsConfig ではなく
-/// 定数でよい(エディターUI導入時 plan9 に検証を実装、loader は警告のみ)。
+/// オリジナルの文字数・数値レンジ(全角6文字等)はPC98由来の参考値であり
+/// **強制しない**(project.md「上限値の扱い」)。UIに収まらない場合は省略表示。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Character {
     pub id: String,            // プロジェクト内で一意("knight" 等)
-    pub first_name: String,    // ゲーム中に表示される名前(全角6/半角12文字)
+    pub first_name: String,    // ゲーム中に表示される名前
     pub last_name: String,     // 名字。ゲーム中は非表示
     pub gender: String,
-    pub height_cm: f32,        // 0.0〜999.9
-    pub weight_kg: f32,        // 0.0〜999.9
-    pub birth_date: String,    // "YYYY-MM-DD"(西暦0000〜9999年)
-    pub age: u32,              // 0〜9999
-    pub likes: String,         // 好きなもの(全角12文字)
-    pub dislikes: String,      // 嫌いなもの(全角12文字)
-    pub background: String,    // 経歴(全角73文字/3行。Wizardry風の職業ラベルはここ)
+    pub height_cm: f32,
+    pub weight_kg: f32,
+    pub birth_date: String,    // "YYYY-MM-DD"
+    pub age: u32,
+    pub likes: String,         // 好きなもの
+    pub dislikes: String,      // 嫌いなもの
+    pub background: String,    // 経歴(複数行可。Wizardry風の職業ラベルはここ)
     pub growth: GrowthType,
     pub stats: Stats,
     pub model: String,         // 見た目: プロジェクト相対 or assets相対のglbパス
@@ -148,9 +148,10 @@ pub struct CharacterState {
 - **version 1 のプロジェクトも読めること**: characters/party が無い場合は
   空パーティ(UI はステータスウインドー非表示)で起動し、警告ログを出す。
 - バリデーション: party の id が characters に存在、party 人数 ≤
-  `limits.party_size`、キャラ数 ≤ `limits.max_characters`、
-  初期 level ≤ 99(プレイ中の上限は 255)。プロフィールの文字数・数値
-  範囲は loader では警告ログのみ(エディターでの入力検証は plan9)。
+  `limits.party_size`、キャラ数 ≤ `limits.max_characters` のみ。
+  プロフィールの文字数・数値範囲は検証しない(PC98由来の参考値のため。
+  project.md「上限値の扱い」)。初期レベルのオリジナル値 0〜99 も参考値と
+  し、型は u32 のまま制限しない。
 
 ## メイン画面UI
 
