@@ -38,6 +38,72 @@ impl Level {
     pub fn floor(&self, index: usize) -> Option<&Floor> {
         self.floors.get(index)
     }
+
+    /// Number of stacked floors.
+    pub fn floor_count(&self) -> usize {
+        self.floors.len()
+    }
+
+    /// Block at a grid position, or `None` if the floor / cell is out of bounds.
+    pub fn block_at(&self, pos: GridPos) -> Option<Block> {
+        self.floor(pos.floor).and_then(|f| f.get(pos.x, pos.y))
+    }
+
+    /// Whether the player can stand on cell `(x, y)` of `floor` without falling
+    /// (plan2「足場の判定」): a ladder always supports; otherwise the lowest floor
+    /// rests on bedrock, and higher floors need a `Wall` directly below (a wall's
+    /// top face is the floor above it).
+    pub fn is_supported(&self, x: i32, y: i32, floor: usize) -> bool {
+        if self.floor(floor).and_then(|f| f.get(x, y)) == Some(Block::Ladder) {
+            return true;
+        }
+        if floor == 0 {
+            return true;
+        }
+        self.floor(floor - 1).and_then(|f| f.get(x, y)) == Some(Block::Wall)
+    }
+
+    /// The floor the player comes to rest on after entering an unsupported cell
+    /// at `(x, y, floor)` — they drop one floor at a time until supported. Floor
+    /// 0 always supports, so this terminates.
+    pub fn landing_floor(&self, x: i32, y: i32, floor: usize) -> usize {
+        let mut f = floor;
+        while f > 0 && !self.is_supported(x, y, f) {
+            f -= 1;
+        }
+        f
+    }
+}
+
+/// Open/closed state of each door *kind* in the current level, keyed by kind
+/// index. The original "Dandan Dungeon" opens doors by kind ("door 1" / "door
+/// 2"), not individually, so a single flag per kind is the whole model. Terrain
+/// (the `Block::Door` cells) stays immutable; only this resource changes.
+#[derive(Resource, Clone, Debug, Default)]
+pub struct DoorStates {
+    /// `open[kind]` — doors start closed.
+    open: Vec<bool>,
+}
+
+impl DoorStates {
+    /// All-closed state for `kinds` door kinds.
+    pub fn new(kinds: usize) -> Self {
+        Self {
+            open: vec![false; kinds],
+        }
+    }
+
+    /// Is the given door kind currently open? Unknown kinds read as closed.
+    pub fn is_open(&self, kind: u8) -> bool {
+        self.open.get(kind as usize).copied().unwrap_or(false)
+    }
+
+    /// Flip the open/closed state of a door kind (no-op for unknown kinds).
+    pub fn toggle(&mut self, kind: u8) {
+        if let Some(state) = self.open.get_mut(kind as usize) {
+            *state = !*state;
+        }
+    }
 }
 
 /// A logical grid position: tile `(x, y)` on `floor`.
@@ -98,6 +164,11 @@ impl Facing {
         }
     }
 
+    /// The reverse heading (180°).
+    pub fn opposite(self) -> Self {
+        self.turn_right().turn_right()
+    }
+
     /// Yaw angle (radians) about +Y for a camera looking in this facing.
     ///
     /// In Bevy's right-handed Y-up space, "forward" is -Z, which is our North,
@@ -120,13 +191,4 @@ pub struct Dungeon {
     pub level: Level,
     pub start_pos: GridPos,
     pub start_facing: Facing,
-}
-
-impl Dungeon {
-    /// The floor the player currently stands on.
-    pub fn current_floor(&self) -> &Floor {
-        self.level
-            .floor(self.start_pos.floor)
-            .expect("start floor exists")
-    }
 }

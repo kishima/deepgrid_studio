@@ -1,3 +1,3 @@
 pub mod movement;
 
-pub use movement::{player_movement, setup_player};
+pub use movement::{Action, Command, MoveAnim, ScriptedInput, player_movement, setup_player};

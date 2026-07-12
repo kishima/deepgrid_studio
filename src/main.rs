@@ -1,4 +1,4 @@
-//! DeepGrid Studio — plan1: a walkable first-person grid dungeon prototype.
+//! DeepGrid Studio — plan2: multi-floor dungeon with falling, ladders and doors.
 //!
 //! `main.rs` only assembles the Bevy `App`; all logic lives in the modules.
 
@@ -11,15 +11,18 @@ mod render;
 use bevy::prelude::*;
 
 use config::LimitsConfig;
+use dungeon::DoorStates;
+use player::ScriptedInput;
 
-/// Path (relative to the working directory / asset root) of the plan1 test map.
+/// Path (relative to the working directory / asset root) of the test map.
 const TEST_MAP_PATH: &str = "assets/maps/test_level.ron";
 
 fn main() {
-    // Limits are the single source of truth for map sizing; the loader validates
-    // the test map against them rather than assuming a hard-coded 40×40.
+    // Limits are the single source of truth for map sizing and door kinds; the
+    // loader validates the test map against them.
     let limits = LimitsConfig::default();
     let dungeon = dungeon::load_dungeon(TEST_MAP_PATH, &limits);
+    let doors = DoorStates::new(limits.door_kinds_per_level);
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -33,10 +36,23 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.03)))
         .insert_resource(limits)
         .insert_resource(dungeon)
-        .add_systems(Startup, (render::setup_dungeon, player::setup_player))
+        .insert_resource(doors)
+        .insert_resource(ScriptedInput::default())
+        .add_systems(
+            Startup,
+            (
+                render::setup_dungeon,
+                player::setup_player,
+                debug_shot::setup_debug_script,
+            ),
+        )
         .add_systems(
             Update,
-            (player::player_movement, debug_shot::debug_screenshot),
+            (
+                player::player_movement,
+                render::update_door_visibility,
+                debug_shot::debug_screenshot,
+            ),
         )
         .run();
 }
