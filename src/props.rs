@@ -3,7 +3,8 @@
 //!
 //! plan5/plan6 will replace this hardcoded list with data-driven item/monster
 //! placement from the map file; this module exists so the look of the game can
-//! be evaluated early. Positions are tuned to `assets/maps/test_level.ron`.
+//! be evaluated early. Positions are tuned to the sample project's level 0
+//! (`assets/projects/sample/levels/level00.ron`).
 
 use bevy::prelude::*;
 

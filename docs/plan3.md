@@ -204,6 +204,13 @@ impl EditorState {
 - `DEEPGRID_DEBUG_SHOT=editor` : エディットモードで sample を開き、
   中央グリッドが描画された状態でスクリーンショットして終了。
   (エディターは操作スクリプトまでは不要。画面が出ることの確認でよい)
+  - **実装メモ(2026-07-13)**: bevy_egui 0.33 はウィンドウのスワップ
+    チェインへ直接描画するため、Bevy の `Screenshot`(中間テクスチャを
+    コピーする)では egui が写らない(mycity-simulator でも既知)。この
+    シーンのみ、エディターUIを `EguiRenderToImage` でオフスクリーン画像に
+    描画し、`gpu_readback` でCPUへ読み戻して自前でPNG保存する
+    (src/editor/shot.rs)。プレイモードの3Dシーンは従来どおり
+    `Screenshot::primary_window` で撮る。
 - 既存シーン(`1|fall|ladder|door|props`)がプロジェクト形式移行後も
   そのまま通ること。
 

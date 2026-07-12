@@ -1,4 +1,5 @@
 /target
 *.exe
 debug-shot.png
+*.ron.bak
 tmp/

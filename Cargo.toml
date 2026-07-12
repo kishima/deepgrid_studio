@@ -28,6 +28,7 @@ bevy = { version = "0.15", default-features = false, features = [
     "x11",
     "webgl2",
 ] }
+bevy_egui = "0.33"
 serde = { version = "1", features = ["derive"] }
 ron = "0.8"
 

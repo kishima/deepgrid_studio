@@ -44,6 +44,13 @@ pub fn debug_shot_enabled() -> bool {
     debug_shot_value().is_some()
 }
 
+/// Whether the requested scene is the editor screen (`DEEPGRID_DEBUG_SHOT=editor`),
+/// which forces edit mode regardless of `--edit`. Editor capture lives in
+/// `editor::shot` (egui on the window isn't captured by Bevy screenshots).
+pub fn wants_editor() -> bool {
+    debug_shot_value().as_deref() == Some("editor")
+}
+
 /// Startup: if a debug-shot scene is requested, load its command script so the
 /// player auto-runs it. `ScriptedInput` starts inactive otherwise.
 pub fn setup_debug_script(mut script: ResMut<ScriptedInput>) {

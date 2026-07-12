@@ -8,7 +8,7 @@ use super::block::Block;
 /// The grid is a plain `Vec<Block>` (not a fixed-size array) so floor sizes stay
 /// data-driven — the dimensions come from `LimitsConfig` / the map file, never a
 /// compile-time constant.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Floor {
     pub width: usize,
     pub height: usize,
@@ -29,7 +29,7 @@ impl Floor {
 }
 
 /// A level: floors stacked bottom (index 0) to top.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Level {
     pub floors: Vec<Floor>,
 }
