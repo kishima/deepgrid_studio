@@ -1,5 +1,6 @@
 use std::f32::consts::FRAC_PI_2;
 
+use bevy::pbr::ClusterConfig;
 use bevy::prelude::*;
 
 use crate::dungeon::{Dungeon, Facing, GridPos};
@@ -88,6 +89,12 @@ pub fn setup_player(mut commands: Commands, dungeon: Res<Dungeon>) {
             Camera3d::default(),
             // Msaa off is friendlier to the software Vulkan (lavapipe) path.
             Msaa::Off,
+            // One cluster for the whole view: with the default clustering, the
+            // player's point light (whose sphere contains the camera) only gets
+            // assigned to the screen-center clusters on this renderer, leaving a
+            // bright screen-space rectangle. A single dungeon light makes
+            // clustering pointless anyway.
+            ClusterConfig::Single,
             Projection::Perspective(PerspectiveProjection {
                 fov: FOV_DEGREES.to_radians(),
                 ..default()

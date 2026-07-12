@@ -18,7 +18,12 @@ if [[ ! -x "$PROJECT/target/$MODE/deepgrid_studio" ]]; then
   exit 1
 fi
 
-exec docker run --rm -it \
+# Allocate a TTY only when we actually have one, so non-interactive callers
+# (CI, AI-driven verification) don't fail with "stdin is not a terminal".
+TTY_FLAGS=()
+[[ -t 0 ]] && TTY_FLAGS=(-it)
+
+exec docker run --rm "${TTY_FLAGS[@]}" \
   -v "$PROJECT":/app \
   -w /app \
   -e DISPLAY="${DISPLAY:-:0}" \
