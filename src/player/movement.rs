@@ -121,23 +121,21 @@ pub fn setup_player(mut commands: Commands, dungeon: Res<Dungeon>) {
     commands.insert_resource(MoveAnim::default());
 }
 
-/// Read WASD/QE and produce at most one action this frame.
-///
-/// Uses *held* state (not just-pressed) so that holding a key keeps feeding the
-/// input buffer and walking continues without re-tapping. Priority order is
-/// fixed; only one action is emitted per frame.
-fn desired_action(keys: &ButtonInput<KeyCode>) -> Option<Action> {
-    if keys.pressed(KeyCode::KeyW) {
+/// Map WASD/QE to at most one action, testing each key with `is_active`
+/// (typically `pressed` or `just_pressed`). Priority order is fixed; only one
+/// action is emitted per frame.
+fn desired_action(mut is_active: impl FnMut(KeyCode) -> bool) -> Option<Action> {
+    if is_active(KeyCode::KeyW) {
         Some(Action::Forward)
-    } else if keys.pressed(KeyCode::KeyS) {
+    } else if is_active(KeyCode::KeyS) {
         Some(Action::Backward)
-    } else if keys.pressed(KeyCode::KeyA) {
+    } else if is_active(KeyCode::KeyA) {
         Some(Action::StrafeLeft)
-    } else if keys.pressed(KeyCode::KeyD) {
+    } else if is_active(KeyCode::KeyD) {
         Some(Action::StrafeRight)
-    } else if keys.pressed(KeyCode::KeyQ) {
+    } else if is_active(KeyCode::KeyQ) {
         Some(Action::TurnLeft)
-    } else if keys.pressed(KeyCode::KeyE) {
+    } else if is_active(KeyCode::KeyE) {
         Some(Action::TurnRight)
     } else {
         None
@@ -221,7 +219,6 @@ pub fn player_movement(
     };
 
     // 1. Advance the current animation.
-    let mut just_finished = false;
     if anim.active {
         anim.elapsed += time.delta_secs();
         let t = ease(anim.elapsed / STEP_DURATION);
@@ -231,30 +228,29 @@ pub fn player_movement(
 
         if anim.elapsed >= STEP_DURATION {
             anim.active = false;
-            just_finished = true;
             // Snap exactly to the canonical logical pose to erase any drift.
             *transform = Transform::from_translation(eye_translation(player.pos))
                 .with_rotation(Quat::from_rotation_y(player.facing.yaw()));
         }
     }
 
-    // 2. Sample input for this frame.
-    let input = desired_action(&keys);
-
-    // 3. Dispatch: start immediately when idle, otherwise remember one press.
+    // 2. Dispatch input. Two distinct signals matter (a tap must move exactly
+    //    one tile, a hold must walk continuously):
+    //    - While animating, buffer only keys *newly pressed* during the
+    //      animation. Buffering the held state here would turn any tap shorter
+    //      than STEP_DURATION into two steps.
+    //    - When idle (including the frame an animation ends), the buffer fires
+    //      first; otherwise a key still *held down right now* starts the next
+    //      step, which is what makes holding a key chain seamlessly.
     if anim.active {
-        if let Some(action) = input {
+        if let Some(action) = desired_action(|k| keys.just_pressed(k)) {
             anim.buffered = Some(action);
         }
     } else {
-        // Idle (possibly having just finished): consume the buffer first, else
-        // the current key. This makes held keys chain seamlessly.
-        let next = if just_finished {
-            anim.buffered.take().or(input)
-        } else {
-            input
-        };
-        anim.buffered = None;
+        let next = anim
+            .buffered
+            .take()
+            .or_else(|| desired_action(|k| keys.pressed(k)));
         if let Some(action) = next {
             start_action(action, &mut player, &mut anim, &dungeon);
         }
