@@ -8,3 +8,6 @@
 - `enemies/skeleton_warrior.glb` — 同上
 - `props/chest.glb` — KayKit Dungeon Remastered 1.0
 - `props/barrel_small.glb` — 同上(配布名 barrel_small.gltf.glb を改名)
+- `party/knight.glb` `party/mage.glb` `party/rogue.glb` `party/rogue_hooded.glb` `party/barbarian.glb`
+  — KayKit Adventurers 1.0。パーティキャラの見た目+ポートレート生成元。
+  リグ+76アニメーション入り(Idle はインデックス36)
