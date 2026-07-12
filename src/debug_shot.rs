@@ -22,6 +22,8 @@ fn scene_script(value: &str) -> VecDeque<Command> {
         "ladder" => vec![Move(TurnRight), Move(Forward), Move(Forward), Move(Forward), ClimbUp],
         // Turn to face the door and open it (kind 0).
         "door" => vec![Move(TurnRight), Move(TurnRight), ToggleDoor],
+        // Turn South toward the showcase props (chest, skeleton, barrel).
+        "props" => vec![Move(TurnRight)],
         // Unknown value: fall back to the start scene.
         _ => vec![],
     };

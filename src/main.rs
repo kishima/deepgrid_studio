@@ -6,6 +6,7 @@ mod config;
 mod debug_shot;
 mod dungeon;
 mod player;
+mod props;
 mod render;
 
 use bevy::prelude::*;
@@ -43,6 +44,7 @@ fn main() {
             (
                 render::setup_dungeon,
                 player::setup_player,
+                props::setup_props,
                 debug_shot::setup_debug_script,
             ),
         )
@@ -51,6 +53,7 @@ fn main() {
             (
                 player::player_movement,
                 render::update_door_visibility,
+                props::attach_prop_animations,
                 debug_shot::debug_screenshot,
             ),
         )

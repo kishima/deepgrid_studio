@@ -17,6 +17,19 @@ https://docs.ambientcg.com/license/ )。
 | Paving Stones 119 | https://ambientcg.com/view?id=PavingStones119 | CC0 1.0 | assets/textures/floor_pavingstones119_color.png | 床 | 2026-07-12 |
 | Rock 058 | https://ambientcg.com/view?id=Rock058 | CC0 1.0 | assets/textures/ceiling_rock058_color.png | 天井 | 2026-07-12 |
 
+## 3Dモデル
+
+すべて Kay Lousberg 氏(https://www.kaylousberg.com)の KayKit シリーズ。
+CC0 1.0(各パック同梱の LICENSE.txt に明記。帰属表記不要・商用利用可)。
+glTF Binary(.glb)、テクスチャ内蔵。GitHub のリリース版から取得。
+
+| 素材 | 入手元 | ライセンス | ファイル | 用途 | 導入日 |
+| --- | --- | --- | --- | --- | --- |
+| KayKit Character Pack: Skeletons 1.0 — Skeleton_Minion | https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Skeletons-1.0 | CC0 1.0 | assets/models/enemies/skeleton_minion.glb | エネミー表示(アニメーション付き) | 2026-07-12 |
+| KayKit Character Pack: Skeletons 1.0 — Skeleton_Warrior | 同上 | CC0 1.0 | assets/models/enemies/skeleton_warrior.glb | エネミー表示(アニメーション付き) | 2026-07-12 |
+| KayKit Dungeon Remastered 1.0 — chest | https://github.com/KayKit-Game-Assets/KayKit-Dungeon-Remastered-1.0 | CC0 1.0 | assets/models/props/chest.glb | アイテム表示(宝箱) | 2026-07-12 |
+| KayKit Dungeon Remastered 1.0 — barrel_small | 同上 | CC0 1.0 | assets/models/props/barrel_small.glb | アイテム表示(樽) | 2026-07-12 |
+
 ## 自作・生成素材
 
 (まだなし。追加時は生成スクリプトのパスと生成手順をここに記録する)
