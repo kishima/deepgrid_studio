@@ -1,0 +1,37 @@
+[package]
+name = "deepgrid_studio"
+version = "0.1.0"
+edition = "2024"
+description = "Grid-based first-person 3D dungeon RPG maker. Homage to PC98 'Dandan Dungeon'."
+license = "GPL-3.0"
+
+[dependencies]
+# Match the versions proven to build/run in docker/ (shared with mycity-simulator).
+# plan1 needs no audio: audio-related features are intentionally omitted.
+bevy = { version = "0.15", default-features = false, features = [
+    "bevy_asset",
+    "bevy_core_pipeline",
+    "bevy_image",
+    "bevy_render",
+    "bevy_sprite",
+    "bevy_window",
+    "bevy_winit",
+    "bevy_pbr",
+    "bevy_scene",
+    "bevy_gltf",
+    "png",
+    "tonemapping_luts",
+    "ktx2",
+    "zstd",
+    "multi_threaded",
+    "x11",
+    "webgl2",
+] }
+serde = { version = "1", features = ["derive"] }
+ron = "0.8"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+strip = true
