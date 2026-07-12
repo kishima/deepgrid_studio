@@ -97,8 +97,11 @@ pub fn setup_player(mut commands: Commands, dungeon: Res<Dungeon>) {
         .with_children(|parent| {
             parent.spawn((
                 PointLight {
-                    intensity: 900_000.0,
-                    range: 30.0,
+                    // Gentle local pool that adds shape near the player; the
+                    // ambient fill (render::setup_dungeon) carries base
+                    // visibility so distant tiles don't sink to black.
+                    intensity: 120_000.0,
+                    range: 22.0,
                     shadows_enabled: false,
                     ..default()
                 },

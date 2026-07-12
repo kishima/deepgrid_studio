@@ -22,12 +22,12 @@ pub fn setup_dungeon(
     let (w, h) = (floor.width as f32, floor.height as f32);
 
     let floor_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.32, 0.29, 0.26),
+        base_color: Color::srgb(0.44, 0.41, 0.37),
         perceptual_roughness: 0.95,
         ..default()
     });
     let ceiling_material = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.24, 0.25, 0.30),
+        base_color: Color::srgb(0.30, 0.31, 0.36),
         perceptual_roughness: 0.95,
         ..default()
     });
@@ -75,8 +75,10 @@ pub fn setup_dungeon(
 
     // Ambient fill so wall faces turned away from the player's light stay
     // readable instead of going black.
+    // High ambient base so the whole floor stays readable and the player light
+    // is a soft accent rather than a harsh hotspot (uniform, Grimrock-ish look).
     commands.insert_resource(AmbientLight {
         color: Color::srgb(0.7, 0.75, 0.9),
-        brightness: 400.0,
+        brightness: 700.0,
     });
 }
