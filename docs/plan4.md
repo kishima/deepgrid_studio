@@ -64,11 +64,11 @@ DeepGrid Studio の第4実装計画書。前提知識は [project.md](project.md
 `src/character.rs`(新設):
 
 ```rust
-/// 能力値(project.md「キャラクターの仕様」)。plan4 で実際に参照するのは
-/// hp/mp/concentration まわりのみだが、器は全項目そろえる。
+/// 能力値(project.md「キャラクターの仕様」+ dandan_spec_things_editor.md)。
+/// plan4 で実際に参照するのは hp/mp/concentration まわりのみだが、器は全項目そろえる。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Stats {
-    pub level: u32,          // 最大255(LimitsConfig 経由で検証)
+    pub level: u32,          // 初期レベルは 0〜99、プレイ中の最大は 255
     pub max_hp: i32,
     pub max_mp: i32,
     pub attack: i32,
@@ -86,16 +86,34 @@ pub struct Stats {
     pub bite: i32,           // 歯の強さ
 }
 
+impl Stats {
+    /// 総合レベル: 全能力パラメーターの平均(dandan_spec: 強さの目安)。
+    /// 保存はせず導出する。表示は plan5 のデータ画面から。
+    pub fn overall_level(&self) -> i32 { /* 平均 */ }
+}
+
+/// 成長タイプ(dandan_spec: 平均型/早期開花型/大器晩成型/天才型/才能なし)。
+/// レベルアップ時の伸び方に影響する。plan4 ではデータとして持つだけ。
 #[derive(Serialize, Deserialize, Clone, Copy, Debug)]
 pub enum GrowthType { Average, EarlyBloomer, LateBloomer, Genius, Talentless }
 
+/// プロフィール(dandan_spec_things_editor.md「名前・プロフィール項目」)。
+/// 感情移入のための項目群で、plan4 でゲームロジックには使わない。
+/// 文字数などの上限はオリジナル準拠の初期値だが LimitsConfig ではなく
+/// 定数でよい(エディターUI導入時 plan9 に検証を実装、loader は警告のみ)。
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Character {
     pub id: String,            // プロジェクト内で一意("knight" 等)
-    pub name: String,          // 表示名(日本語可)
+    pub first_name: String,    // ゲーム中に表示される名前(全角6/半角12文字)
+    pub last_name: String,     // 名字。ゲーム中は非表示
     pub gender: String,
-    pub age: u32,
-    pub background: String,    // 経歴(Wizardry風の職業ラベルはここ)
+    pub height_cm: f32,        // 0.0〜999.9
+    pub weight_kg: f32,        // 0.0〜999.9
+    pub birth_date: String,    // "YYYY-MM-DD"(西暦0000〜9999年)
+    pub age: u32,              // 0〜9999
+    pub likes: String,         // 好きなもの(全角12文字)
+    pub dislikes: String,      // 嫌いなもの(全角12文字)
+    pub background: String,    // 経歴(全角73文字/3行。Wizardry風の職業ラベルはここ)
     pub growth: GrowthType,
     pub stats: Stats,
     pub model: String,         // 見た目: プロジェクト相対 or assets相対のglbパス
@@ -125,11 +143,14 @@ pub struct CharacterState {
 
 - `characters.ron` は `Vec<Character>`。sample には5キャラを手書きする
   (名前・経歴は雰囲気重視で自由に。例: ガルド/戦士、メリナ/魔法使い、
-  ソロン/僧侶、シッフ/盗賊、バルグ/蛮族)。
+  ソロン/僧侶、シッフ/盗賊、バルグ/蛮族。プロフィール項目も全部埋めて
+  データ例として機能させる)。
 - **version 1 のプロジェクトも読めること**: characters/party が無い場合は
   空パーティ(UI はステータスウインドー非表示)で起動し、警告ログを出す。
 - バリデーション: party の id が characters に存在、party 人数 ≤
-  `limits.party_size`、キャラ数 ≤ `limits.max_characters`、level ≤ 255。
+  `limits.party_size`、キャラ数 ≤ `limits.max_characters`、
+  初期 level ≤ 99(プレイ中の上限は 255)。プロフィールの文字数・数値
+  範囲は loader では警告ログのみ(エディターでの入力検証は plan9)。
 
 ## メイン画面UI
 
@@ -183,6 +204,8 @@ Cargo feature に `bevy_ui` `bevy_text` `default_font` を追加する。
   `props` シーン相当の描画で体感がもたつくかどうかでよい。
 
 これにより静止画ファイルの生成は不要(PNG ポートレートは作らない)。
+オリジナルの「顔のグラフィック」(グラフィックエディターで自作した肖像画)に
+相当する機能で、ユーザー画像による差し替えは plan10(グラフィック差し替え機構)で扱う。
 
 ## サイクル時間システム
 
