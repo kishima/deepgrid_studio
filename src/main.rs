@@ -7,6 +7,7 @@
 mod autotest;
 mod character;
 mod clock;
+mod combat;
 mod config;
 mod data_screen;
 mod debug_shot;
@@ -17,11 +18,12 @@ mod game_state;
 mod hazard;
 mod hud;
 mod item;
+mod monster;
 mod player;
 mod portrait;
 mod project;
-mod props;
 mod render;
+mod rng;
 
 use std::path::PathBuf;
 
@@ -32,8 +34,12 @@ use dungeon::DoorStates;
 use floor_items::{InitialItems, PickupRequest};
 use game_state::{DataScreen, SelectedMember};
 use hud::MessageLog;
+use monster::{
+    AttackRotation, InitialMonsters, MonsterOccupancy, PartyWiped, PlayerAction,
+};
 use player::{PlayerFell, ScriptedInput};
 use project::Project;
+use rng::GameRng;
 
 /// Default project loaded when `--project` is not given.
 const DEFAULT_PROJECT: &str = "assets/projects/sample";
@@ -85,7 +91,9 @@ fn run_play(project: Project) {
     let dungeon = project.levels[0].to_dungeon();
     let party = project.build_party();
     let catalog = project.build_catalog();
+    let monster_catalog = project.build_monster_catalog();
     let initial_items = InitialItems(project.levels[0].items.clone());
+    let initial_monsters = InitialMonsters(project.levels[0].monsters.clone());
 
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -102,15 +110,24 @@ fn run_play(project: Project) {
     .insert_resource(doors)
     .insert_resource(party)
     .insert_resource(catalog)
+    .insert_resource(monster_catalog)
     .insert_resource(initial_items)
+    .insert_resource(initial_monsters)
     .insert_resource(ScriptedInput::default())
     .insert_resource(MessageLog::default())
     .insert_resource(GameClock::default())
     .init_resource::<DataScreen>()
     .init_resource::<SelectedMember>()
+    .init_resource::<MonsterOccupancy>()
+    .init_resource::<AttackRotation>()
+    .init_resource::<PartyWiped>()
+    .init_resource::<monster::EnemyNear>()
+    .init_resource::<hud::IconMove>()
+    .init_resource::<GameRng>()
     .add_event::<PlayerFell>()
     .add_event::<CycleTick>()
-    .add_event::<PickupRequest>();
+    .add_event::<PickupRequest>()
+    .add_event::<PlayerAction>();
     data_screen::init(&mut app);
 
     app.add_systems(
@@ -118,8 +135,8 @@ fn run_play(project: Project) {
         (
             render::setup_dungeon,
             player::setup_player,
-            props::setup_props,
             floor_items::setup_floor_items,
+            monster::setup_monsters,
             debug_shot::setup_debug_script,
             hud::greet,
             // Portraits build the render-target images the HUD cards show, so
@@ -132,9 +149,21 @@ fn run_play(project: Project) {
         (
             player::player_movement,
             render::update_door_visibility,
-            props::attach_prop_animations,
+            portrait::attach_portrait_anim,
             floor_items::spin_floor_items,
             debug_shot::debug_screenshot,
+        ),
+    )
+    // Monster display + occupancy (frame-rate driven visuals).
+    .add_systems(
+        Update,
+        (
+            monster::update_occupancy,
+            monster::update_enemy_near,
+            monster::build_monster_graphs,
+            monster::bind_monster_players,
+            monster::drive_monster_anim,
+            monster::interpolate_monsters,
         ),
     )
     // Cycle time: tick the clock, then run every on-cycle system this frame.
@@ -146,16 +175,20 @@ fn run_play(project: Project) {
             character::tick_effects,
             hazard::hazard_tick,
             data_screen::rest_tick,
+            monster::monster_ai,
+            monster::monster_attacks,
+            monster::monster_lifecycle,
         )
             .chain(),
     )
-    // Pickup/place read this frame's requests (written by movement / the data
-    // screen), so order them after their producers.
+    // Pickup/place/combat read this frame's requests (written by movement / the
+    // data screen), so order them after their producers.
     .add_systems(
         Update,
         (
             character::apply_fall_damage.after(player::player_movement),
             floor_items::handle_pickup.after(player::player_movement),
+            monster::player_actions.after(player::player_movement),
             data_screen::data_screen_interactions,
             floor_items::handle_place.after(data_screen::data_screen_interactions),
             data_screen::toggle_data_screen,
@@ -168,6 +201,8 @@ fn run_play(project: Project) {
             hud::update_status_bars,
             hud::update_cards,
             hud::update_messages,
+            hud::action_icon_clicks,
+            hud::move_icon_clicks,
             portrait::freeze_portraits,
         ),
     );
@@ -185,6 +220,14 @@ fn run_play(project: Project) {
                 autotest::run
                     .after(floor_items::handle_place)
                     .after(hazard::hazard_tick),
+            )
+            .add_systems(
+                Update,
+                autotest::run_combat
+                    .after(autotest::run)
+                    .after(monster::player_actions)
+                    .after(monster::monster_attacks)
+                    .after(monster::monster_lifecycle),
             );
     }
 

@@ -55,7 +55,8 @@ fn tile_center(pos: GridPos) -> Vec3 {
 }
 
 /// Spawn one floor-item entity (glTF model or generic gem) for `instance`.
-fn spawn_floor_item(
+/// Public so monster drops / thrown items (plan6) reuse the same visual.
+pub fn spawn_loose_item(
     commands: &mut Commands,
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
@@ -105,7 +106,7 @@ pub fn setup_floor_items(
             continue;
         };
         let pos = GridPos::new(placement.x, placement.y, placement.floor);
-        spawn_floor_item(
+        spawn_loose_item(
             &mut commands,
             &asset_server,
             &mut meshes,
@@ -193,7 +194,7 @@ pub fn handle_place(
         };
         let name = def.name.clone();
         let def = def.clone();
-        spawn_floor_item(
+        spawn_loose_item(
             &mut commands,
             &asset_server,
             &mut meshes,

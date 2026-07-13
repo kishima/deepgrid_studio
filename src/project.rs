@@ -21,6 +21,7 @@ use crate::config::LimitsConfig;
 use crate::dungeon::level::{Floor, Level};
 use crate::dungeon::{Block, Dungeon, Facing, GridPos};
 use crate::item::{Inventory, ItemCatalog, ItemDef, ItemInstance, ItemPlacement};
+use crate::monster::{MonsterCatalog, MonsterDef, MonsterPlacement};
 
 /// `project.ron` on disk.
 ///
@@ -45,6 +46,9 @@ struct ProjectMeta {
     /// Item-definitions file, project-relative (v3+). Empty = no items.
     #[serde(default)]
     items: String,
+    /// Monster-definitions file, project-relative (v4+). Empty = no monsters.
+    #[serde(default)]
+    monsters: String,
 }
 
 /// One floor of the on-disk map: `height` rows of `width` characters.
@@ -69,6 +73,9 @@ struct MapFile {
     /// Item placements (map format v3; `#[serde(default)]` so v2 files load).
     #[serde(default)]
     items: Vec<ItemPlacement>,
+    /// Monster placements (map format v4; `#[serde(default)]` so v3 files load).
+    #[serde(default)]
+    monsters: Vec<MonsterPlacement>,
 }
 
 /// An in-memory level: the mutable block grids, the player's start, and item
@@ -80,6 +87,8 @@ pub struct LevelData {
     pub level: Level,
     /// Items placed on this level (plan5).
     pub items: Vec<ItemPlacement>,
+    /// Monsters placed on this level (plan6).
+    pub monsters: Vec<MonsterPlacement>,
 }
 
 impl LevelData {
@@ -106,8 +115,8 @@ impl LevelData {
 }
 
 /// Project-format version this build writes. Older versions are still accepted
-/// on load for backward compatibility (v1: no characters; v2: no items).
-pub const PROJECT_VERSION: u32 = 3;
+/// on load (v1: no characters; v2: no items; v3: no monsters).
+pub const PROJECT_VERSION: u32 = 4;
 
 /// A loaded project: metadata, limits, levels, registered characters + party
 /// roster (v2+), and item definitions (v3+).
@@ -123,12 +132,19 @@ pub struct Project {
     pub party: Vec<String>,
     /// All item definitions (empty for a pre-v3 project).
     pub items: Vec<ItemDef>,
+    /// All monster definitions (empty for a pre-v4 project).
+    pub monsters: Vec<MonsterDef>,
 }
 
 impl Project {
     /// Build the item catalog from the loaded definitions (ids already unique).
     pub fn build_catalog(&self) -> ItemCatalog {
         ItemCatalog::from_defs(self.items.clone(), "items").unwrap_or_default()
+    }
+
+    /// Build the monster catalog from the loaded definitions.
+    pub fn build_monster_catalog(&self) -> MonsterCatalog {
+        MonsterCatalog::from_defs(self.monsters.clone(), "monsters").unwrap_or_default()
     }
 
     /// Build the runtime [`Party`] resource: resolve each roster id to its
@@ -190,6 +206,26 @@ fn items_from_ron(text: &str, limits: &LimitsConfig, what: &str) -> Result<Vec<I
     // Surface duplicate ids here for a clearer message than catalog build.
     ItemCatalog::from_defs(items.clone(), what)?;
     Ok(items)
+}
+
+/// Parse and validate a `monsters.ron` (a `Vec<MonsterDef>`) against `limits`:
+/// count ≤ `max_monster_kinds`, ids unique.
+fn monsters_from_ron(
+    text: &str,
+    limits: &LimitsConfig,
+    what: &str,
+) -> Result<Vec<MonsterDef>, String> {
+    let monsters: Vec<MonsterDef> =
+        ron::from_str(text).map_err(|e| format!("failed to parse {what}: {e}"))?;
+    if monsters.len() > limits.max_monster_kinds {
+        return Err(format!(
+            "{what} has {} monster kinds, exceeds max_monster_kinds {}",
+            monsters.len(),
+            limits.max_monster_kinds
+        ));
+    }
+    MonsterCatalog::from_defs(monsters.clone(), what)?;
+    Ok(monsters)
 }
 
 /// Parse and validate a `characters.ron` (a `Vec<Character>`) against `limits`:
@@ -369,11 +405,37 @@ fn level_from_map(map: &MapFile, limits: &LimitsConfig, what: &str) -> Result<Le
         }
     }
 
+    if map.monsters.len() > limits.monster_placements_per_level {
+        return Err(format!(
+            "{what} places {} monsters, exceeds monster_placements_per_level {}",
+            map.monsters.len(),
+            limits.monster_placements_per_level
+        ));
+    }
+    let kinds: std::collections::HashSet<&str> =
+        map.monsters.iter().map(|m| m.id.as_str()).collect();
+    if kinds.len() > limits.monster_kinds_per_level {
+        return Err(format!(
+            "{what} uses {} monster kinds, exceeds monster_kinds_per_level {}",
+            kinds.len(),
+            limits.monster_kinds_per_level
+        ));
+    }
+    for m in &map.monsters {
+        if level.block_at(GridPos::new(m.x, m.y, m.floor)).is_none() {
+            return Err(format!(
+                "{what} monster '{}' at ({},{},floor {}) is out of bounds",
+                m.id, m.x, m.y, m.floor
+            ));
+        }
+    }
+
     Ok(LevelData {
         start,
         start_facing: map.start_facing,
         level,
         items: map.items.clone(),
+        monsters: map.monsters.clone(),
     })
 }
 
@@ -403,6 +465,7 @@ fn map_from_level(data: &LevelData) -> MapFile {
         start_facing: data.start_facing,
         floors,
         items: data.items.clone(),
+        monsters: data.monsters.clone(),
     }
 }
 
@@ -485,12 +548,31 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
         items_from_ron(&text, &meta.limits, &meta.items)?
     };
 
+    // Monsters (v4). Pre-v4 projects load with no monsters.
+    let monsters = if meta.monsters.is_empty() {
+        Vec::new()
+    } else {
+        let path = dir.join(&meta.monsters);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        monsters_from_ron(&text, &meta.limits, &meta.monsters)?
+    };
+
     // Cross-check placements + starting items reference known item ids.
     let known = |id: &str| items.iter().any(|d| d.id == id);
+    let known_monster = |id: &str| monsters.iter().any(|d| d.id == id);
     for (rel, level) in meta.levels.iter().zip(&levels) {
         for p in &level.items {
             if !known(&p.id) {
                 return Err(format!("{rel}: placed item '{}' is not defined in {}", p.id, meta.items));
+            }
+        }
+        for m in &level.monsters {
+            if !known_monster(&m.id) {
+                return Err(format!(
+                    "{rel}: placed monster '{}' is not defined in {}",
+                    m.id, meta.monsters
+                ));
             }
         }
     }
@@ -500,6 +582,16 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
                 return Err(format!(
                     "character '{}' starting item '{id}' is not defined in {}",
                     c.id, meta.items
+                ));
+            }
+        }
+    }
+    for def in &monsters {
+        for id in def.carry_items.iter().chain(&def.attack_items) {
+            if !known(id) {
+                return Err(format!(
+                    "monster '{}' references unknown item '{id}' in {}",
+                    def.id, meta.items
                 ));
             }
         }
@@ -514,6 +606,7 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
         characters,
         party: meta.party,
         items,
+        monsters,
     })
 }
 
@@ -565,6 +658,7 @@ mod tests {
             start_facing: Facing::East,
             level: Level { floors: vec![floor0, floor1] },
             items: Vec::new(),
+            monsters: Vec::new(),
         }
     }
 
@@ -693,6 +787,22 @@ mod tests {
     }
 
     #[test]
+    fn level_monsters_round_trip() {
+        let limits = LimitsConfig::default();
+        let mut lvl = sample_level();
+        lvl.monsters = vec![crate::monster::MonsterPlacement {
+            id: "skel".into(),
+            x: 1,
+            y: 0,
+            floor: 1,
+            facing: Facing::South,
+        }];
+        let ron = level_to_ron(&lvl).expect("serialize");
+        let restored = level_from_ron(&ron, &limits, "roundtrip").expect("parse");
+        assert_eq!(lvl.monsters, restored.monsters);
+    }
+
+    #[test]
     fn sample_project_loads() {
         // Guards every sample RON file (project/characters/items/level) against
         // schema drift — the same load path the runtime uses.
@@ -700,6 +810,8 @@ mod tests {
         assert_eq!(project.party.len(), 4);
         assert!(project.items.iter().any(|d| d.id == "sword_iron"));
         assert!(!project.levels[0].items.is_empty());
+        assert!(project.monsters.iter().any(|d| d.id == "skel_minion"));
+        assert!(!project.levels[0].monsters.is_empty());
         // Knight starts armed + armoured.
         let party = project.build_party();
         let knight = &party.members[0];
@@ -720,6 +832,7 @@ mod tests {
             characters: chars,
             party: vec!["knight".into()],
             items: vec![],
+            monsters: vec![],
         };
         let party = project.build_party();
         assert_eq!(party.len(), 1);

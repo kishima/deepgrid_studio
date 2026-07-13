@@ -22,8 +22,10 @@ fn scene_script(value: &str) -> VecDeque<Command> {
         "ladder" => vec![Move(TurnRight), Move(Forward), Move(Forward), Move(Forward), ClimbUp],
         // Turn to face the door and open it (kind 0).
         "door" => vec![Move(TurnRight), Move(TurnRight), ToggleDoor],
-        // Turn South toward the showcase props (skeleton).
-        "props" => vec![Move(TurnRight)],
+        // Turn South to face the sentinel monster (skel_guard) + floor items.
+        "monster" => vec![Move(TurnRight)],
+        // Step up to the sentinel and attack it (shows a combat message).
+        "combat" => vec![Move(TurnRight), Move(Forward), Attack],
         // Turn South to face the floor items (sword, chest, barrel, glow stone).
         "items" => vec![Move(TurnRight)],
         // Step onto the sword tile to the south and pick it up.

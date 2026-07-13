@@ -147,6 +147,25 @@ pub enum GrowthType {
     Talentless,
 }
 
+impl GrowthType {
+    /// Per-level-up growth multiplier (plan6, provisional). Early/late bloomers
+    /// swing on either side of level 20.
+    pub fn multiplier(self, level: u32) -> f32 {
+        match self {
+            GrowthType::Average => 1.0,
+            GrowthType::EarlyBloomer => if level < 20 { 1.5 } else { 0.5 },
+            GrowthType::LateBloomer => if level < 20 { 0.5 } else { 1.5 },
+            GrowthType::Genius => 1.5,
+            GrowthType::Talentless => 0.2,
+        }
+    }
+}
+
+/// Experience needed to reach the level after `level` (plan6, provisional).
+pub fn level_up_threshold(level: u32) -> i32 {
+    (level.max(1) as i32) * 100
+}
+
 /// A registered character: profile + stats + which model shows their portrait.
 ///
 /// The profile fields exist for player attachment (dandan_spec_things_editor.md);
@@ -208,6 +227,12 @@ pub struct CharacterState {
     pub effects: Vec<ActiveEffect>,
     /// Remaining cycles of lingering poison (plan5 liquid damage).
     pub poison_remaining: u32,
+    /// Accumulated experience toward the next level (plan6).
+    pub exp: i32,
+    /// 防ぐ: halve the next incoming hit, then clear (plan6).
+    pub guarding: bool,
+    /// 精神統一: concentration recovers 5× until acting / being hit (plan6).
+    pub concentrating: bool,
 }
 
 impl CharacterState {
@@ -220,6 +245,9 @@ impl CharacterState {
             down: false,
             effects: Vec::new(),
             poison_remaining: 0,
+            exp: 0,
+            guarding: false,
+            concentrating: false,
         }
     }
 }
@@ -273,6 +301,56 @@ impl PartyMember {
             self.state.down = true;
         }
         Ok(format!("{}を食べた", def.name))
+    }
+
+    /// Award `amount` experience and apply any resulting level-ups (plan6). Growth
+    /// scales the flat per-level gains by [`GrowthType::multiplier`]. Returns one
+    /// message per level gained (base values never mutated except stats here).
+    pub fn gain_exp(&mut self, amount: i32) -> Vec<String> {
+        const GROWABLE: [StatKind; 13] = [
+            StatKind::Attack,
+            StatKind::Defense,
+            StatKind::Agility,
+            StatKind::Throwing,
+            StatKind::Carrying,
+            StatKind::LungCapacity,
+            StatKind::HeatResist,
+            StatKind::PoisonResist,
+            StatKind::MagicKnowledge,
+            StatKind::Concentration,
+            StatKind::Appraisal,
+            StatKind::Stealing,
+            StatKind::Bite,
+        ];
+        let name = self.character.first_name.clone();
+        let mut msgs = Vec::new();
+        self.state.exp += amount;
+        loop {
+            let level = self.character.stats.level;
+            let need = level_up_threshold(level);
+            if self.state.exp < need {
+                break;
+            }
+            self.state.exp -= need;
+            let mult = self.character.growth.multiplier(level);
+            let dhp = (4.0 * mult).floor() as i32;
+            let dmp = (2.0 * mult).floor() as i32;
+            let d1 = mult.floor() as i32;
+            {
+                let s = &mut self.character.stats;
+                s.level += 1;
+                s.max_hp += dhp;
+                s.max_mp += dmp;
+                for k in GROWABLE {
+                    s.add(k, d1);
+                }
+            }
+            // Heal by the max gains so the new headroom is filled.
+            self.state.hp += dhp;
+            self.state.mp += dmp;
+            msgs.push(format!("{name}は レベル {} になった!", self.character.stats.level));
+        }
+        msgs
     }
 }
 
@@ -383,6 +461,55 @@ mod tests {
     fn overall_level_is_mean_of_abilities() {
         // All 15 ability fields equal 20 → mean is 20.
         assert_eq!(stats(20).overall_level(), 20);
+    }
+
+    fn member(growth: GrowthType, level: u32) -> PartyMember {
+        let ch = Character {
+            id: "t".into(),
+            first_name: "テスト".into(),
+            last_name: "".into(),
+            gender: "".into(),
+            height_cm: 170.0,
+            weight_kg: 60.0,
+            birth_date: "0-1-1".into(),
+            age: 20,
+            likes: "".into(),
+            dislikes: "".into(),
+            background: "".into(),
+            growth,
+            stats: Stats { level, max_hp: 100, attack: 10, ..stats(5) },
+            model: "".into(),
+            items: vec![],
+        };
+        let state = CharacterState::full(&ch);
+        PartyMember { character: ch, state, inventory: Inventory::new(3, 3) }
+    }
+
+    #[test]
+    fn level_up_grows_stats_by_growth_type() {
+        // Average at level 1: threshold 100, multiplier 1.0 → +4 HP, +1 to each.
+        let mut m = member(GrowthType::Average, 1);
+        let msgs = m.gain_exp(100);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(m.character.stats.level, 2);
+        assert_eq!(m.character.stats.max_hp, 104);
+        assert_eq!(m.character.stats.attack, 11);
+        assert_eq!(m.state.exp, 0);
+
+        // Talentless at level 1: multiplier 0.2 → floor(4*0.2)=0 HP, floor(0.2)=0.
+        let mut t = member(GrowthType::Talentless, 1);
+        t.gain_exp(100);
+        assert_eq!(t.character.stats.level, 2);
+        assert_eq!(t.character.stats.max_hp, 100); // no growth
+        assert_eq!(t.character.stats.attack, 10);
+    }
+
+    #[test]
+    fn growth_multiplier_swings_at_20() {
+        assert_eq!(GrowthType::EarlyBloomer.multiplier(10), 1.5);
+        assert_eq!(GrowthType::EarlyBloomer.multiplier(25), 0.5);
+        assert_eq!(GrowthType::LateBloomer.multiplier(10), 0.5);
+        assert_eq!(GrowthType::LateBloomer.multiplier(25), 1.5);
     }
 
     #[test]

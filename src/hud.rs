@@ -113,6 +113,43 @@ pub struct MessageLine {
     row: usize,
 }
 
+/// An action-icon button; clicking it fires the same `PlayerAction` as its key.
+#[derive(Component)]
+pub struct ActionIcon(crate::monster::PlayerAction);
+
+/// A move-icon button; clicking it queues the same movement `Command` as its key.
+#[derive(Component)]
+pub struct MoveIcon(crate::player::Command);
+
+/// One-slot buffer for a movement command issued by a move-icon click. Consumed
+/// by `player_movement` (folded into its `ActionEvents` param).
+#[derive(Resource, Default)]
+pub struct IconMove(pub Option<crate::player::Command>);
+
+/// Fire `PlayerAction`s from action-icon clicks.
+pub fn action_icon_clicks(
+    icons: Query<(&Interaction, &ActionIcon), Changed<Interaction>>,
+    mut actions: EventWriter<crate::monster::PlayerAction>,
+) {
+    for (interaction, icon) in &icons {
+        if *interaction == Interaction::Pressed {
+            actions.send(icon.0);
+        }
+    }
+}
+
+/// Buffer a movement command from move-icon clicks.
+pub fn move_icon_clicks(
+    icons: Query<(&Interaction, &MoveIcon), Changed<Interaction>>,
+    mut icon_move: ResMut<IconMove>,
+) {
+    for (interaction, icon) in &icons {
+        if *interaction == Interaction::Pressed {
+            icon_move.0 = Some(icon.0);
+        }
+    }
+}
+
 /// Build the HUD once at startup. No-op for an empty party (v1 projects) — the
 /// status window is simply absent, per plan4.
 pub fn setup_hud(
@@ -178,6 +215,95 @@ pub fn setup_hud(
                     TextColor(Color::srgb(0.85, 0.85, 0.80)),
                     MessageLine { row },
                 ));
+            }
+        });
+
+    // Action-icon window: bottom-right, above the message window (plan6). Same
+    // functions as the Space/B/C/T/V keys.
+    use crate::monster::PlayerAction;
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                right: Val::Px(8.0),
+                bottom: Val::Px(MESSAGE_H + 14.0),
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(4.0),
+                padding: UiRect::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(PANEL_BG),
+        ))
+        .with_children(|row| {
+            for (act, label) in [
+                (PlayerAction::Attack, "攻撃"),
+                (PlayerAction::Guard, "防ぐ"),
+                (PlayerAction::Concentrate, "精神"),
+                (PlayerAction::Throw, "投げる"),
+                (PlayerAction::Steal, "盗む"),
+            ] {
+                row.spawn((
+                    Button,
+                    Node { padding: UiRect::axes(Val::Px(7.0), Val::Px(4.0)), ..default() },
+                    BackgroundColor(Color::srgb(0.22, 0.24, 0.30)),
+                    ActionIcon(act),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        Text::new(label),
+                        TextFont { font: bold.clone(), font_size: 13.0, ..default() },
+                        TextColor(Color::WHITE),
+                    ));
+                });
+            }
+        });
+
+    // Move-icon window: bottom-left, above the message window (auxiliary input).
+    use crate::player::{Action, Command};
+    let grid: [[(Command, &str); 3]; 3] = [
+        [(Command::Move(Action::TurnLeft), "左"), (Command::Move(Action::Forward), "↑"), (Command::Move(Action::TurnRight), "右")],
+        [(Command::Move(Action::StrafeLeft), "←"), (Command::Move(Action::Backward), "↓"), (Command::Move(Action::StrafeRight), "→")],
+        [(Command::ClimbUp, "上"), (Command::ClimbDown, "下"), (Command::Get, "取")],
+    ];
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(8.0),
+                bottom: Val::Px(MESSAGE_H + 14.0),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(3.0),
+                padding: UiRect::all(Val::Px(4.0)),
+                ..default()
+            },
+            BackgroundColor(PANEL_BG),
+        ))
+        .with_children(|col| {
+            for r in grid {
+                col.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(3.0), ..default() })
+                    .with_children(|row| {
+                        for (cmd, label) in r {
+                            row.spawn((
+                                Button,
+                                Node {
+                                    width: Val::Px(30.0),
+                                    height: Val::Px(26.0),
+                                    justify_content: JustifyContent::Center,
+                                    align_items: AlignItems::Center,
+                                    ..default()
+                                },
+                                BackgroundColor(Color::srgb(0.20, 0.22, 0.28)),
+                                MoveIcon(cmd),
+                            ))
+                            .with_children(|b| {
+                                b.spawn((
+                                    Text::new(label),
+                                    TextFont { font: bold.clone(), font_size: 14.0, ..default() },
+                                    TextColor(Color::WHITE),
+                                ));
+                            });
+                        }
+                    });
             }
         });
 }

@@ -403,6 +403,7 @@ mod tests {
                 floors: vec![floor0, floor1],
             },
             items: Vec::new(),
+            monsters: Vec::new(),
         };
         Project {
             dir: PathBuf::from("/tmp/does-not-exist"),
@@ -413,6 +414,7 @@ mod tests {
             characters: Vec::new(),
             party: Vec::new(),
             items: Vec::new(),
+            monsters: Vec::new(),
         }
     }
 

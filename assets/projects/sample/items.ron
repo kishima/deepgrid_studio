@@ -26,6 +26,9 @@
     (id: "amulet_ward", name: "まもりのおまもり", kind: Accessory, weight: 1,
      equip_slots: [Waist], effects: [(stat: PoisonResist, delta: 40)]),
 
+    // --- throwing (plan6) ---
+    (id: "throwing_knife", name: "投げナイフ", kind: General, sharpness: 8, weight: 1, throwability: 60, grip: 20),
+
     // --- food / drink ---
     (id: "bread", name: "パン", kind: General, hardness: 3, weight: 1, nutrition: 25, temperature: 20),
     (id: "water_bottle", name: "みずのビン", kind: Liquid, hardness: 0, weight: 1, nutrition: 5, temperature: 10),

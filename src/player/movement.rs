@@ -47,6 +47,16 @@ pub enum Command {
     Get,
     /// Toggle the data screen (plan5).
     ToggleData,
+    /// Attack the monster ahead (plan6).
+    Attack,
+    /// Guard: halve the next incoming hit (plan6).
+    Guard,
+    /// Concentrate: 5× concentration recovery until acting (plan6).
+    Concentrate,
+    /// Throw the selected member's held item ahead (plan6).
+    Throw,
+    /// Steal from the monster ahead (plan6).
+    Steal,
 }
 
 /// Emitted once when a fall finishes, carrying how many floors were dropped
@@ -386,8 +396,24 @@ fn start_command(cmd: Command, player: &mut Player, anim: &mut MoveAnim, dungeon
         Command::ClimbDown => start_climb(false, player, anim, dungeon, doors),
         Command::ToggleDoor => toggle_front_door(player, dungeon, doors),
         // Handled instantly in `player_movement` before reaching here.
-        Command::Get | Command::ToggleData => {}
+        Command::Get
+        | Command::ToggleData
+        | Command::Attack
+        | Command::Guard
+        | Command::Concentrate
+        | Command::Throw
+        | Command::Steal => {}
     }
+}
+
+/// The action-event writers, bundled so `player_movement` stays within Bevy's
+/// 16-parameter system limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct ActionEvents<'w> {
+    pickup: EventWriter<'w, crate::floor_items::PickupRequest>,
+    combat: EventWriter<'w, crate::monster::PlayerAction>,
+    /// Movement command buffered by a move-icon click (hud.rs).
+    icon_move: ResMut<'w, crate::hud::IconMove>,
 }
 
 /// Drive input, animation, and the camera transform each frame.
@@ -406,12 +432,19 @@ pub fn player_movement(
     party: Res<crate::character::Party>,
     catalog: Res<crate::item::ItemCatalog>,
     mut log: ResMut<crate::hud::MessageLog>,
-    mut pickup: EventWriter<crate::floor_items::PickupRequest>,
+    mut events: ActionEvents,
+    occ: Res<crate::monster::MonsterOccupancy>,
     mut data: ResMut<crate::game_state::DataScreen>,
     mut overweight_warned: Local<bool>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
     use crate::floor_items::PickupRequest;
+    use crate::monster::PlayerAction;
+
+    let front_tile = |p: &Player| {
+        let (dx, dy) = p.facing.delta();
+        GridPos::new(p.pos.x + dx, p.pos.y + dy, p.pos.floor)
+    };
 
     let Ok(mut transform) = cameras.get_single_mut() else {
         return;
@@ -452,10 +485,27 @@ pub fn player_movement(
         }
         if !data.open {
             if keys.just_pressed(KeyCode::Space) {
-                toggle_front_door(&player, &dungeon, &mut doors);
+                // Space multiplexes: attack a monster ahead, else toggle a door.
+                if occ.contains(front_tile(&player)) {
+                    events.combat.send(PlayerAction::Attack);
+                } else {
+                    toggle_front_door(&player, &dungeon, &mut doors);
+                }
             }
             if keys.just_pressed(KeyCode::KeyG) {
-                pickup.send(PickupRequest);
+                events.pickup.send(PickupRequest);
+            }
+            if keys.just_pressed(KeyCode::KeyB) {
+                events.combat.send(PlayerAction::Guard);
+            }
+            if keys.just_pressed(KeyCode::KeyC) {
+                events.combat.send(PlayerAction::Concentrate);
+            }
+            if keys.just_pressed(KeyCode::KeyT) {
+                events.combat.send(PlayerAction::Throw);
+            }
+            if keys.just_pressed(KeyCode::KeyV) {
+                events.combat.send(PlayerAction::Steal);
             }
         }
     }
@@ -475,8 +525,11 @@ pub fn player_movement(
         } else if data.open {
             None
         } else {
-            anim.buffered
+            events
+                .icon_move
+                .0
                 .take()
+                .or_else(|| anim.buffered.take())
                 .or_else(|| desired_command(|k| keys.pressed(k)))
         };
         if let Some(cmd) = next {
@@ -484,15 +537,35 @@ pub fn player_movement(
                 // Inventory / screen commands are instant and world-independent.
                 Command::Get => {
                     if !data.open {
-                        pickup.send(PickupRequest);
+                        events.pickup.send(PickupRequest);
                     }
                 }
                 Command::ToggleData => data.open = !data.open,
+                // Combat commands become `PlayerAction` events (ignored while the
+                // data screen is up).
+                Command::Attack if !data.open => {
+                    events.combat.send(PlayerAction::Attack);
+                }
+                Command::Guard if !data.open => {
+                    events.combat.send(PlayerAction::Guard);
+                }
+                Command::Concentrate if !data.open => {
+                    events.combat.send(PlayerAction::Concentrate);
+                }
+                Command::Throw if !data.open => {
+                    events.combat.send(PlayerAction::Throw);
+                }
+                Command::Steal if !data.open => {
+                    events.combat.send(PlayerAction::Steal);
+                }
                 // World commands are ignored while the data screen is open.
                 _ if data.open => {}
-                // A translation is refused when any member is overloaded; turns
-                // are always allowed so the party can still look around.
+                // A translation is refused when any member is overloaded or a
+                // monster blocks the destination; turns are always allowed.
                 Command::Move(action) if move_facing(action, player.facing).is_some() => {
+                    let dir = move_facing(action, player.facing).unwrap();
+                    let (dx, dy) = dir.delta();
+                    let dest = GridPos::new(player.pos.x + dx, player.pos.y + dy, player.pos.floor);
                     if let Some(idx) = party.overweight_member(&catalog) {
                         if !*overweight_warned {
                             log.push(format!(
@@ -501,6 +574,9 @@ pub fn player_movement(
                             ));
                             *overweight_warned = true;
                         }
+                    } else if occ.contains(dest) {
+                        // A monster blocks the way — attack it instead of moving.
+                        events.combat.send(PlayerAction::Attack);
                     } else {
                         *overweight_warned = false;
                         start_command(cmd, &mut player, &mut anim, &dungeon, &mut doors);

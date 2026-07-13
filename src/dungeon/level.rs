@@ -110,7 +110,7 @@ impl DoorStates {
 ///
 /// plan1 keeps movement within a single floor, but `floor` is carried so the
 /// ladder / fall mechanics of later plans slot in without reshaping this type.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct GridPos {
     pub x: i32,
     pub y: i32,

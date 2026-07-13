@@ -490,6 +490,7 @@ pub fn data_screen_interactions(
     mut selected_slot: ResMut<SelectedSlot>,
     mut resting: ResMut<Resting>,
     mut log: ResMut<MessageLog>,
+    enemy_near: Res<crate::monster::EnemyNear>,
     mut place: EventWriter<PlaceRequest>,
     tabs: Query<(&Interaction, &MemberTab), Changed<Interaction>>,
     slots: Query<(&Interaction, &SlotButton), Changed<Interaction>>,
@@ -517,6 +518,10 @@ pub fn data_screen_interactions(
             continue;
         }
         if action.0 == ActionKind::Zzz {
+            if !resting.active && enemy_near.0 {
+                log.push("モンスターが近くにいる!");
+                continue;
+            }
             resting.active = !resting.active;
             log.push(if resting.active { "休息を始めた" } else { "休息をやめた" });
             continue;
@@ -576,15 +581,23 @@ pub fn data_screen_interactions(
 
 /// ZZZ rest: while the data screen is open and resting, heal 1 HP/MP every
 /// [`REST_CYCLES`] cycles, up to each member's maximum.
+#[allow(clippy::too_many_arguments)]
 pub fn rest_tick(
     mut accum: Local<u64>,
     mut ticks: EventReader<CycleTick>,
     screen: Res<DataScreen>,
-    resting: Res<Resting>,
+    mut resting: ResMut<Resting>,
+    enemy_near: Res<crate::monster::EnemyNear>,
+    mut log: ResMut<MessageLog>,
     catalog: Res<ItemCatalog>,
     mut party: ResMut<Party>,
 ) {
     let cycles = ticks.read().count() as u64;
+    // A monster coming into view interrupts the rest (plan6).
+    if resting.active && enemy_near.0 {
+        resting.active = false;
+        log.push("モンスターが現れて 休息を中断した!");
+    }
     if !screen.open || !resting.active {
         *accum = 0;
         return;

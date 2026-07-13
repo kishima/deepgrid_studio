@@ -1,0 +1,63 @@
+// DeepGrid Studio sample — monster definitions (plan6). A `Vec<MonsterDef>`
+// read through src/project.rs (monster.rs::MonsterDef). Only non-default fields
+// are written. All four use the two CC0 KayKit skeleton models we already ship
+// (skeleton_mage/rogue were not fetched; minion/warrior stand in). Animation
+// clips are referenced by name (robust to pack re-indexing).
+//
+// action_unit / attack_freq 255 = "never" (original convention). Ranges follow
+// the original as reference values only.
+[
+    // Immobile sentinel placed on floor 1 in view of the start room — used by the
+    // `monster` / `combat` debug scenes; sight 0 + action_unit 255 keep it from
+    // ever disturbing the unattended autotest on floor 1.
+    (
+        id: "skel_guard",
+        name: "みはりの骸骨",
+        max_hp: 40, attack: 10, defense: 4, agility: 8,
+        move_type: None, action_unit: 255, attack_freq: 255, sight: 0,
+        exp: 8, carry_items: ["glow_stone"],
+        model: "models/enemies/skeleton_warrior.glb",
+        anim: (idle: "Idle_Combat", walk: "Walking_A", attack: "1H_Melee_Attack_Slice_Diagonal", hit: "Hit_A", death: "Death_A"),
+    ),
+    // Weak wanderer.
+    (
+        id: "skel_minion",
+        name: "骸骨の下っぱ",
+        max_hp: 18, attack: 8, defense: 2, agility: 8,
+        move_type: Ground, action_unit: 12, attack_freq: 14, sight: 6,
+        exp: 6, carry_items: ["key_bronze"],
+        model: "models/enemies/skeleton_minion.glb",
+        anim: (idle: "Idle", walk: "Walking_A", attack: "1H_Melee_Attack_Slice_Diagonal", hit: "Hit_A", death: "Death_A"),
+    ),
+    // Mid-tier; flees when badly hurt, drops a weapon.
+    (
+        id: "skel_warrior",
+        name: "骸骨の戦士",
+        max_hp: 40, attack: 12, defense: 8, agility: 10,
+        move_type: Ground, action_unit: 14, attack_freq: 12, sight: 6, flee_hp: 8,
+        exp: 12, carry_items: ["sword_iron"],
+        model: "models/enemies/skeleton_warrior.glb",
+        anim: (idle: "Idle", walk: "Walking_A", attack: "1H_Melee_Attack_Slice_Diagonal", hit: "Hit_A", death: "Death_A"),
+    ),
+    // Fast, wary, and regenerates.
+    (
+        id: "skel_rogue",
+        name: "骸骨の盗人",
+        max_hp: 20, attack: 6, defense: 4, agility: 16,
+        move_type: Ground, action_unit: 8, attack_freq: 16, sight: 6,
+        wariness: 60, regen_cycles: 40,
+        exp: 9, carry_items: ["bread"],
+        model: "models/enemies/skeleton_minion.glb",
+        anim: (idle: "Idle", walk: "Walking_A", attack: "1H_Melee_Attack_Slice_Diagonal", hit: "Hit_A", death: "Death_A"),
+    ),
+    // Ranged caster (defined for completeness; not placed in the sample level).
+    (
+        id: "skel_mage",
+        name: "骸骨の魔道士",
+        max_hp: 22, attack: 5, defense: 3, agility: 9,
+        move_type: Ground, action_unit: 16, attack_freq: 255, sight: 8,
+        exp: 10, attack_items: ["throwing_knife"],
+        model: "models/enemies/skeleton_minion.glb",
+        anim: (idle: "Idle", walk: "Walking_A", attack: "Spellcast_Shoot", hit: "Hit_A", death: "Death_A"),
+    ),
+]

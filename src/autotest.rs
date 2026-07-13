@@ -58,6 +58,9 @@ pub struct AutoTest {
     saved_pos: Option<GridPos>,
     saved_inventory: Option<Inventory>,
     acted: bool,
+    // Combat-step scratch (steps 13+).
+    monster_ent: Option<Entity>,
+    attempts: u32,
 }
 
 impl AutoTest {
@@ -67,6 +70,8 @@ impl AutoTest {
         self.frames = 0;
         self.phase = 0;
         self.acted = false;
+        self.attempts = 0;
+        self.monster_ent = None;
         self.hp_before.clear();
         self.saved_pos = None;
     }
@@ -562,11 +567,440 @@ pub fn run(
                             .zip(&t.hp_before)
                             .all(|(m, &b)| m.state.hp == b);
                         if stable {
-                            println!("[autotest] PASS poison wears off");
-                            println!("[autotest] ALL PASS (13 steps)");
-                            exit.send(AppExit::Success);
+                            // Hand off to the combat steps (run_combat, step ≥13).
+                            t.next_step("poison wears off");
                         } else {
                             fail(&t, "poison-end", "毒が切れた後もHPが減っている".into(), &mut exit);
+                        }
+                    }
+                }
+            }
+        }
+
+        _ => {}
+    }
+}
+
+// ==================================================================== combat steps
+
+use crate::data_screen::Resting;
+use crate::game_state::{DataScreen, SelectedMember};
+use crate::monster::{EnemyNear, Monster, MonsterCatalog};
+use crate::combat;
+
+/// Spawn a bare (logic-only, no model) monster in front of the party for a
+/// combat step. Returns the entity.
+fn spawn_subject(commands: &mut Commands, player: &Player, def_id: &str, hp: i32) -> (Entity, GridPos) {
+    let (dx, dy) = player.facing.delta();
+    let front = GridPos::new(player.pos.x + dx, player.pos.y + dy, player.pos.floor);
+    let e = commands.spawn(Monster::new_at(def_id, hp, front, player.facing.opposite())).id();
+    (e, front)
+}
+
+/// Push a scripted player command (used to drive Attack/Guard/Throw/Steal through
+/// the real input → PlayerAction → combat pipeline).
+fn push_cmd(script: &mut ScriptedInput, cmd: Command) {
+    script.queue.push_back(cmd);
+    script.active = true;
+}
+
+/// Steps 13+ : combat, throw, steal, flee, regen, rest-blocking. Runs only once
+/// the pickup/hazard suite (`run`) has advanced `step` past 12.
+#[allow(clippy::too_many_arguments)]
+pub fn run_combat(
+    mut t: ResMut<AutoTest>,
+    mut commands: Commands,
+    mut party: ResMut<Party>,
+    item_catalog: Res<ItemCatalog>,
+    monster_catalog: Res<MonsterCatalog>,
+    mut player: ResMut<Player>,
+    clock: Res<GameClock>,
+    log: Res<MessageLog>,
+    mut script: ResMut<ScriptedInput>,
+    mut selected: ResMut<SelectedMember>,
+    enemy_near: Res<EnemyNear>,
+    mut resting: ResMut<Resting>,
+    mut data: ResMut<DataScreen>,
+    mut monsters: Query<(Entity, &mut Monster)>,
+    floor_items: Query<&FloorItem>,
+    mut exit: EventWriter<AppExit>,
+) {
+    if t.step < 13 || t.fatal.is_some() {
+        return;
+    }
+    let fail = |t: &AutoTest, name: &str, why: String, exit: &mut EventWriter<AppExit>| {
+        eprintln!("[autotest] FAIL {name}: {why}");
+        eprintln!("[autotest] {} step(s) passed before the failure", t.step);
+        exit.send(AppExit::error());
+    };
+    let hp_of = |e: Entity, q: &Query<(Entity, &mut Monster)>| q.get(e).map(|(_, m)| m.hp).ok();
+    let dead_of = |e: Entity, q: &Query<(Entity, &mut Monster)>| q.get(e).map(|(_, m)| m.dead).ok();
+
+    match t.step {
+        // ---- 13: attacking a monster reduces its HP (retry on a miss) --------
+        13 => {
+            if t.monster_ent.is_none() {
+                let (e, _) = spawn_subject(&mut commands, &player, "skel_guard", 999);
+                t.monster_ent = Some(e);
+                t.baseline = 999;
+                // Concentrate first (also covers the Concentrate command), then hit.
+                push_cmd(&mut script, Command::Concentrate);
+                push_cmd(&mut script, Command::Attack);
+                return;
+            }
+            let e = t.monster_ent.unwrap();
+            match hp_of(e, &monsters) {
+                Some(hp) if hp < t.baseline => {
+                    script.active = false;
+                    commands.entity(e).despawn();
+                    t.next_step("combat-hit: Attack lowers monster HP");
+                }
+                _ => {
+                    // Miss or not resolved yet — retry every ~20 frames.
+                    if t.frames.is_multiple_of(20) && t.frames > 0 {
+                        push_cmd(&mut script, Command::Attack);
+                    }
+                    if t.frames > STEP_TIMEOUT_FRAMES {
+                        fail(&t, "combat-hit", "攻撃してもHPが減らない".into(), &mut exit);
+                    }
+                }
+            }
+        }
+
+        // ---- 14: a kill drops carry items and grants experience --------------
+        14 => {
+            // A regen-0 monster despawns the instant it dies, so we verify by the
+            // lasting effects (loot on the floor, exp, log), not the entity.
+            match t.phase {
+                0 => {
+                    let (e, pos) = spawn_subject(&mut commands, &player, "skel_minion", 1);
+                    t.monster_ent = Some(e);
+                    t.saved_pos = Some(pos);
+                    t.baseline = party.members.iter().map(|m| m.state.exp).sum();
+                    t.phase = 1;
+                }
+                1 => {
+                    // Entity now exists: give it loot, then strike.
+                    let e = t.monster_ent.unwrap();
+                    if let Ok((_, mut m)) = monsters.get_mut(e) {
+                        m.carry = vec!["glow_stone".into()];
+                        push_cmd(&mut script, Command::Attack);
+                        t.phase = 2;
+                    } else if t.frames > STEP_TIMEOUT_FRAMES {
+                        fail(&t, "combat-kill", "敵がスポーンしない".into(), &mut exit);
+                    }
+                }
+                _ => {
+                    let pos = t.saved_pos.unwrap();
+                    let exp_now: i32 = party.members.iter().map(|m| m.state.exp).sum();
+                    let dropped = floor_items
+                        .iter()
+                        .any(|it| it.pos == pos && it.instance.def_id == "glow_stone");
+                    if dropped && log.contains("たおした") && exp_now > t.baseline {
+                        script.active = false;
+                        t.next_step("combat-kill drops loot + grants exp");
+                    } else if t.frames.is_multiple_of(20) && t.frames > 0 {
+                        push_cmd(&mut script, Command::Attack);
+                    }
+                    if t.frames > STEP_TIMEOUT_FRAMES {
+                        fail(&t, "combat-kill", format!("drop={dropped} exp {} → {exp_now}", t.baseline), &mut exit);
+                    }
+                }
+            }
+        }
+
+        // ---- 15: enough experience levels a member up ------------------------
+        15 => match t.phase {
+            0 => {
+                // Tip every member to one exp short of the next level, so whoever
+                // the exp share reaches will cross it.
+                for m in &mut party.members {
+                    let need = crate::character::level_up_threshold(m.character.stats.level);
+                    m.state.exp = need - 1;
+                }
+                t.baseline = party.members[0].character.stats.level as i32;
+                let (e, _) = spawn_subject(&mut commands, &player, "skel_warrior", 1);
+                t.monster_ent = Some(e);
+                t.phase = 1;
+            }
+            1 => {
+                let e = t.monster_ent.unwrap();
+                if monsters.get(e).is_ok() {
+                    push_cmd(&mut script, Command::Attack);
+                    t.phase = 2;
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "levelup", "敵がスポーンしない".into(), &mut exit);
+                }
+            }
+            _ => {
+                let lvl = party.members[0].character.stats.level as i32;
+                if lvl > t.baseline && log.contains("レベル") {
+                    script.active = false;
+                    t.next_step("levelup: killing over the threshold raises level");
+                } else if t.frames.is_multiple_of(20) && t.frames > 0 {
+                    push_cmd(&mut script, Command::Attack);
+                }
+                if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "levelup", format!("level {} → {lvl}", t.baseline), &mut exit);
+                }
+            }
+        },
+
+        // ---- 16: guarding halves the next incoming hit -----------------------
+        16 => match t.phase {
+            0 => {
+                // Guard the party, and place an attacker adjacent but not yet
+                // ready to strike (so guard is applied first).
+                push_cmd(&mut script, Command::Guard);
+                let (e, _) = spawn_subject(&mut commands, &player, "skel_warrior", 999);
+                if let Ok((_, mut m)) = monsters.get_mut(e) {
+                    m.next_attack = u64::MAX;
+                    m.fleeing = false;
+                }
+                t.monster_ent = Some(e);
+                t.phase = 1;
+            }
+            1 => {
+                // Once guard is in force, arm the monster and snapshot HP.
+                if party.members.iter().any(|m| m.state.guarding) {
+                    let e = t.monster_ent.unwrap();
+                    if let Ok((_, mut m)) = monsters.get_mut(e) {
+                        m.next_attack = clock.cycle;
+                    }
+                    t.hp_before = party.members.iter().map(|m| m.state.hp).collect();
+                    t.phase = 2;
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "guard", "防ぐが適用されない".into(), &mut exit);
+                }
+            }
+            _ => {
+                // Detect the first member whose HP dropped, check the halving.
+                if let Some((i, drop)) = party.members.iter().enumerate().find_map(|(i, m)| {
+                    let before = *t.hp_before.get(i).unwrap_or(&m.state.hp);
+                    (m.state.hp < before).then_some((i, before - m.state.hp))
+                }) {
+                    let def = monster_catalog.get("skel_warrior").unwrap();
+                    let full = combat::final_damage(
+                        0,
+                        def.attack,
+                        party.members[i].character.stats.defense,
+                        0,
+                        1,
+                    );
+                    let expected = combat::guarded(full, true);
+                    if drop == expected {
+                        if let Some(e) = t.monster_ent.take() {
+                            commands.entity(e).despawn();
+                        }
+                        t.next_step("guard halves the incoming hit");
+                    } else {
+                        fail(&t, "guard", format!("drop {drop} ≠ {expected} (full {full})"), &mut exit);
+                    }
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "guard", "敵が一度も当ててこない".into(), &mut exit);
+                }
+            }
+        },
+
+        // ---- 17: throwing an item damages a monster and drops the item -------
+        17 => {
+            if t.monster_ent.is_none() {
+                use crate::item::{ItemInstance, SlotRef};
+                // Put a throwing knife in member 0's left hand.
+                selected.index = 0;
+                party.members[0].inventory.take(SlotRef::Hand(0));
+                let _ = party.members[0]
+                    .inventory
+                    .put(SlotRef::Hand(0), ItemInstance::new("throwing_knife"));
+                let (e, _) = spawn_subject(&mut commands, &player, "skel_guard", 999);
+                t.monster_ent = Some(e);
+                t.baseline = 999;
+                push_cmd(&mut script, Command::Throw);
+                return;
+            }
+            let e = t.monster_ent.unwrap();
+            let hurt = hp_of(e, &monsters).is_some_and(|hp| hp < t.baseline);
+            let dropped = floor_items.iter().any(|it| it.instance.def_id == "throwing_knife");
+            if hurt && dropped {
+                script.active = false;
+                commands.entity(e).despawn();
+                t.next_step("throw damages a monster and lands the item");
+            } else if t.frames > STEP_TIMEOUT_FRAMES {
+                fail(&t, "throw", format!("hurt={hurt} dropped={dropped}"), &mut exit);
+            }
+        }
+
+        // ---- 18: a skilled thief succeeds (item moves) -----------------------
+        18 => {
+            use crate::item::ItemInstance;
+            if t.monster_ent.is_none() {
+                // Select the best thief.
+                let thief = party
+                    .members
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, m)| m.effective_stats(&item_catalog).get(StatKind::Stealing))
+                    .map(|(i, _)| i)
+                    .unwrap_or(0);
+                selected.index = thief;
+                let (e, _) = spawn_subject(&mut commands, &player, "skel_minion", 999);
+                if let Ok((_, mut m)) = monsters.get_mut(e) {
+                    m.carry = vec!["glow_stone".into()];
+                }
+                t.monster_ent = Some(e);
+                t.baseline = party.members[thief]
+                    .inventory
+                    .iter()
+                    .filter(|(_, it)| it.def_id == "glow_stone")
+                    .count() as i32;
+                push_cmd(&mut script, Command::Steal);
+                return;
+            }
+            let thief = selected.index;
+            let have = party.members[thief]
+                .inventory
+                .iter()
+                .filter(|(_, it)| it.def_id == "glow_stone")
+                .count() as i32;
+            if have > t.baseline && log.contains("ぬすんだ") {
+                script.active = false;
+                if let Some(e) = t.monster_ent.take() {
+                    commands.entity(e).despawn();
+                }
+                t.next_step("steal succeeds for a skilled thief");
+            } else {
+                // Retry (deterministic RNG still advances each attempt).
+                if t.frames.is_multiple_of(15) && t.frames > 0 {
+                    // Refill carry if a prior failed attempt emptied it (it won't
+                    // on failure, but keep it robust) and retry.
+                    let e = t.monster_ent.unwrap();
+                    if let Ok((_, mut m)) = monsters.get_mut(e)
+                        && m.carry.is_empty() {
+                            m.carry = vec!["glow_stone".into()];
+                        }
+                    let _ = ItemInstance::new("x");
+                    push_cmd(&mut script, Command::Steal);
+                    t.attempts += 1;
+                }
+                if t.attempts > 40 {
+                    fail(&t, "steal", "熟練でも一度も盗めない".into(), &mut exit);
+                }
+            }
+        }
+
+        // ---- 19: stealing from a wary/empty monster fails + counterattack ----
+        19 => {
+            if t.monster_ent.is_none() {
+                // Empty carry ⇒ the steal always takes the fail path.
+                let (e, _) = spawn_subject(&mut commands, &player, "skel_warrior", 999);
+                if let Ok((_, mut m)) = monsters.get_mut(e) {
+                    m.carry.clear();
+                    m.fleeing = false;
+                }
+                t.monster_ent = Some(e);
+                push_cmd(&mut script, Command::Steal);
+                return;
+            }
+            if log.contains("盗みに失敗") && log.contains("こうげき") {
+                script.active = false;
+                if let Some(e) = t.monster_ent.take() {
+                    commands.entity(e).despawn();
+                }
+                t.next_step("failed steal provokes a counterattack");
+            } else if t.frames > STEP_TIMEOUT_FRAMES {
+                fail(&t, "steal-fail", "失敗/反撃のログが出ない".into(), &mut exit);
+            }
+        }
+
+        // ---- 20: a badly hurt monster flees (distance grows) -----------------
+        // Run in the open floor-0 room (the cramped start room boxes a monster in).
+        20 => {
+            match t.phase {
+                0 => {
+                    player.pos = GridPos::new(5, 5, 0);
+                    let mut m = Monster::new_at("skel_warrior", 3, GridPos::new(6, 5, 0), Facing::West);
+                    m.fleeing = true; // hp below flee_hp
+                    let e = commands.spawn(m).id();
+                    t.monster_ent = Some(e);
+                    t.baseline = 1; // initial chebyshev distance
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 1;
+                }
+                _ => {
+                    let e = t.monster_ent.unwrap();
+                    if let Ok((_, m)) = monsters.get(e) {
+                        let dist = (m.pos.x - player.pos.x).abs().max((m.pos.y - player.pos.y).abs());
+                        if dist > t.baseline {
+                            commands.entity(e).despawn();
+                            player.pos = t.start_pos.unwrap();
+                            t.next_step("a fleeing monster increases its distance");
+                        } else if clock.cycle >= t.mark_cycle + 60 {
+                            fail(&t, "flee", format!("距離が広がらない (dist {dist})"), &mut exit);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- 21: a monster with regen revives after its delay ----------------
+        21 => {
+            if t.monster_ent.is_none() {
+                // Somewhere the player is not standing.
+                let pos = GridPos::new(player.pos.x, player.pos.y + 2, player.pos.floor);
+                let mut m = Monster::new_at("skel_rogue", 0, pos, Facing::North);
+                m.dead = true;
+                m.dead_cycle = clock.cycle;
+                let e = commands.spawn(m).id();
+                t.monster_ent = Some(e);
+                t.mark_cycle = clock.cycle;
+                return;
+            }
+            let e = t.monster_ent.unwrap();
+            if dead_of(e, &monsters) == Some(false) {
+                commands.entity(e).despawn();
+                t.next_step("regen revives the monster");
+            } else if clock.cycle >= t.mark_cycle + 120 {
+                fail(&t, "regen", "regen_cycles 経過後も復活しない".into(), &mut exit);
+            }
+        }
+
+        // ---- 22: ZZZ resting is blocked / interrupted near a monster ---------
+        22 => {
+            if t.monster_ent.is_none() {
+                // skel_minion has sight 6, so it sees the adjacent party.
+                let (dx, dy) = player.facing.delta();
+                let front = GridPos::new(player.pos.x + dx, player.pos.y + dy, player.pos.floor);
+                let e = commands.spawn(Monster::new_at("skel_minion", 999, front, Facing::North)).id();
+                t.monster_ent = Some(e);
+                return;
+            }
+            match t.phase {
+                0 => {
+                    // Let occupancy / enemy-near update, then try to rest.
+                    if enemy_near.0 {
+                        data.open = true;
+                        resting.active = true;
+                        t.hp_before = party.members.iter().map(|m| m.state.hp).collect();
+                        t.mark_cycle = clock.cycle;
+                        t.phase = 1;
+                    } else if t.frames > STEP_TIMEOUT_FRAMES {
+                        fail(&t, "rest-blocked", "モンスターを視認できていない".into(), &mut exit);
+                    }
+                }
+                _ => {
+                    if clock.cycle >= t.mark_cycle + 12 {
+                        let interrupted = !resting.active;
+                        let no_heal = party
+                            .members
+                            .iter()
+                            .zip(&t.hp_before)
+                            .all(|(m, &b)| m.state.hp <= b);
+                        if interrupted && no_heal && log.contains("モンスター") {
+                            println!("[autotest] PASS rest is blocked near a monster");
+                            println!("[autotest] ALL PASS (22 steps)");
+                            exit.send(AppExit::Success);
+                        } else {
+                            fail(&t, "rest-blocked", format!("interrupted={interrupted} no_heal={no_heal}"), &mut exit);
                         }
                     }
                 }

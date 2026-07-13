@@ -21,7 +21,60 @@ use bevy::render::render_resource::{
 };
 
 use crate::character::Party;
-use crate::props::animated_scene;
+
+/// Animation to loop on a portrait's glTF once its `AnimationPlayer` appears.
+/// (Moved here from the deleted props.rs — portraits are its only user now.)
+#[derive(Component)]
+pub struct PortraitAnim {
+    graph: Handle<AnimationGraph>,
+    node: AnimationNodeIndex,
+}
+
+/// Build a `(SceneRoot, PortraitAnim)` playing clip `anim_index`, looped once the
+/// scene's `AnimationPlayer` is wired by [`attach_portrait_anim`].
+fn portrait_scene(
+    asset_server: &AssetServer,
+    graphs: &mut Assets<AnimationGraph>,
+    path: &str,
+    anim_index: usize,
+) -> (SceneRoot, PortraitAnim) {
+    let scene = SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(path.to_string())));
+    let (graph, node) = AnimationGraph::from_clip(
+        asset_server.load(GltfAssetLabel::Animation(anim_index).from_asset(path.to_string())),
+    );
+    (
+        scene,
+        PortraitAnim {
+            graph: graphs.add(graph),
+            node,
+        },
+    )
+}
+
+/// Wire each portrait model's spawned `AnimationPlayer` to its looping clip.
+pub fn attach_portrait_anim(
+    mut commands: Commands,
+    mut players: Query<(Entity, &mut AnimationPlayer), Added<AnimationPlayer>>,
+    parents: Query<&Parent>,
+    anims: Query<&PortraitAnim>,
+) {
+    for (entity, mut player) in &mut players {
+        let mut current = entity;
+        loop {
+            if let Ok(anim) = anims.get(current) {
+                commands
+                    .entity(entity)
+                    .insert(AnimationGraphHandle(anim.graph.clone()));
+                player.play(anim.node).repeat();
+                break;
+            }
+            match parents.get(current) {
+                Ok(parent) => current = parent.get(),
+                Err(_) => break,
+            }
+        }
+    }
+}
 
 /// Portrait render-target resolution (square).
 const PORTRAIT_SIZE: u32 = 128;
@@ -102,7 +155,7 @@ pub fn setup_portraits(
 
         // Model, feet at `base`, facing +Z (toward the camera), Idle looping.
         let (scene, anim) =
-            animated_scene(&asset_server, &mut graphs, &member.character.model, ANIM_IDLE_ADVENTURER);
+            portrait_scene(&asset_server, &mut graphs, &member.character.model, ANIM_IDLE_ADVENTURER);
         commands.spawn((scene, anim, Transform::from_translation(base)));
 
         // Fill light close in front of the model (range-limited so it can't reach

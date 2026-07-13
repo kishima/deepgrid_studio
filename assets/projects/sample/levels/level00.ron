@@ -160,4 +160,13 @@
         (id: "barrel", x: 7, y: 6, floor: 1),
         (id: "glow_stone", x: 8, y: 6, floor: 1),
     ],
+    // Monster placements (plan6). The floor-1 sentinel is immobile with sight 0
+    // (for the monster/combat scenes); the floor-0 wanderers can't use ladders,
+    // so they never reach the floor-1 autotest area.
+    monsters: [
+        (id: "skel_guard", x: 4, y: 6, floor: 1, facing: North),
+        (id: "skel_minion", x: 6, y: 3, floor: 0, facing: South),
+        (id: "skel_warrior", x: 7, y: 3, floor: 0, facing: West),
+        (id: "skel_rogue", x: 5, y: 3, floor: 0, facing: East),
+    ],
 )
