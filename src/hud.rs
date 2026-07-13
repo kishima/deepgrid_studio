@@ -35,6 +35,7 @@ const BAR_W: f32 = 120.0;
 const HP_COLOR: Color = Color::srgb(0.25, 0.55, 1.0);
 const MP_COLOR: Color = Color::srgb(0.95, 0.30, 0.30);
 const CONC_COLOR: Color = Color::srgb(0.35, 0.85, 0.35);
+const SATIETY_COLOR: Color = Color::srgb(0.95, 0.60, 0.20);
 const BAR_TRACK: Color = Color::srgb(0.12, 0.12, 0.15);
 const CARD_BG: Color = Color::srgba(0.08, 0.08, 0.11, 0.92);
 const CARD_BG_DOWN: Color = Color::srgba(0.14, 0.14, 0.14, 0.92);
@@ -86,6 +87,8 @@ enum BarKind {
     Hp,
     Mp,
     Concentration,
+    /// Satiety / 満腹度 (plan6.5). Only present when hunger rules are enabled.
+    Satiety,
 }
 
 /// Fill node of a bar; `update_status` sets its width from the party state.
@@ -157,10 +160,12 @@ pub fn setup_hud(
     asset_server: Res<AssetServer>,
     party: Res<Party>,
     portraits: Res<Portraits>,
+    rules: Res<crate::rules::RulesConfig>,
 ) {
     if party.is_empty() {
         return;
     }
+    let hunger = rules.hunger.enabled;
     let regular: Handle<Font> = asset_server.load(FONT_REGULAR);
     let bold: Handle<Font> = asset_server.load(FONT_BOLD);
 
@@ -182,7 +187,7 @@ pub fn setup_hud(
         .with_children(|panel| {
             for (slot, member) in party.members.iter().enumerate() {
                 let portrait = portraits.images.get(slot).cloned().unwrap_or_default();
-                spawn_card(panel, slot, &member.character.first_name, portrait, &regular, &bold);
+                spawn_card(panel, slot, &member.character.first_name, portrait, &regular, &bold, hunger);
             }
         });
 
@@ -308,7 +313,9 @@ pub fn setup_hud(
         });
 }
 
-/// Spawn one party card: portrait, name, and the three bars.
+/// Spawn one party card: portrait, name, and the HP/MP/集 bars (+ satiety when
+/// hunger is enabled).
+#[allow(clippy::too_many_arguments)]
 fn spawn_card(
     panel: &mut ChildBuilder,
     slot: usize,
@@ -316,6 +323,7 @@ fn spawn_card(
     portrait: Handle<Image>,
     regular: &Handle<Font>,
     bold: &Handle<Font>,
+    hunger: bool,
 ) {
     panel
         .spawn((
@@ -359,6 +367,9 @@ fn spawn_card(
                 spawn_bar(col, slot, BarKind::Hp, "HP", HP_COLOR, regular);
                 spawn_bar(col, slot, BarKind::Mp, "MP", MP_COLOR, regular);
                 spawn_bar(col, slot, BarKind::Concentration, "集", CONC_COLOR, regular);
+                if hunger {
+                    spawn_bar(col, slot, BarKind::Satiety, "腹", SATIETY_COLOR, regular);
+                }
             });
         });
 }
@@ -420,7 +431,11 @@ fn ratio(current: i32, max: i32) -> f32 {
 }
 
 /// Reflect party state onto the bars each frame.
-pub fn update_status_bars(party: Res<Party>, mut bars: Query<(&StatBar, &mut Node)>) {
+pub fn update_status_bars(
+    party: Res<Party>,
+    rules: Res<crate::rules::RulesConfig>,
+    mut bars: Query<(&StatBar, &mut Node)>,
+) {
     for (bar, mut node) in &mut bars {
         let Some(member) = party.members.get(bar.slot) else {
             continue;
@@ -431,20 +446,23 @@ pub fn update_status_bars(party: Res<Party>, mut bars: Query<(&StatBar, &mut Nod
             BarKind::Concentration => {
                 (member.state.concentration, member.character.stats.concentration)
             }
+            BarKind::Satiety => (member.state.satiety, rules.hunger.satiety_max),
         };
         node.width = Val::Percent(ratio(cur, max));
     }
 }
 
-/// Grey a card and append 気絶 to the name when the member is down.
+/// Grey a card and append 気絶 / 飢餓 to the name when the member is down / starving.
 pub fn update_cards(
     party: Res<Party>,
+    rules: Res<crate::rules::RulesConfig>,
     mut cards: Query<(&CardRoot, &mut BackgroundColor)>,
     mut names: Query<(&CardName, &mut Text)>,
 ) {
+    let starving = |m: &crate::character::PartyMember| rules.hunger.enabled && m.state.satiety == 0;
     for (card, mut bg) in &mut cards {
         if let Some(member) = party.members.get(card.slot) {
-            bg.0 = if member.state.down { CARD_BG_DOWN } else { CARD_BG };
+            bg.0 = if member.state.down || starving(member) { CARD_BG_DOWN } else { CARD_BG };
         }
     }
     for (name, mut text) in &mut names {
@@ -452,6 +470,8 @@ pub fn update_cards(
             let base = &member.character.first_name;
             **text = if member.state.down {
                 format!("{base}  気絶")
+            } else if starving(member) {
+                format!("{base}  飢餓")
             } else {
                 base.clone()
             };

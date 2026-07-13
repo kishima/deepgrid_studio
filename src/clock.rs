@@ -51,8 +51,13 @@ pub fn tick_clock(time: Res<Time>, mut clock: ResMut<GameClock>, mut ticks: Even
 }
 
 /// On each cycle, restore 1 concentration to every conscious party member, up to
-/// their maximum (plan4). Knocked-out members don't recover.
-pub fn recover_concentration(mut ticks: EventReader<CycleTick>, mut party: ResMut<Party>) {
+/// their maximum (plan4). Knocked-out members don't recover; nor do starving
+/// members when hunger is enabled (plan6.5).
+pub fn recover_concentration(
+    mut ticks: EventReader<CycleTick>,
+    rules: Res<crate::rules::RulesConfig>,
+    mut party: ResMut<Party>,
+) {
     let cycles = ticks.read().count() as i32;
     if cycles == 0 {
         return;
@@ -60,6 +65,9 @@ pub fn recover_concentration(mut ticks: EventReader<CycleTick>, mut party: ResMu
     for member in &mut party.members {
         if member.state.down {
             continue;
+        }
+        if rules.hunger.enabled && member.state.satiety == 0 {
+            continue; // starving: no focus to spare
         }
         let max = member.character.stats.concentration;
         member.state.concentration = (member.state.concentration + cycles).min(max);

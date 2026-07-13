@@ -150,6 +150,7 @@ pub fn run(
     clock: Res<GameClock>,
     anim: Res<MoveAnim>,
     log: Res<MessageLog>,
+    rules: Res<crate::rules::RulesConfig>,
     mut script: ResMut<ScriptedInput>,
     mut pickup_ev: EventWriter<PickupRequest>,
     mut place_ev: EventWriter<PlaceRequest>,
@@ -308,7 +309,7 @@ pub fn run(
             let m = &mut party.members[idx];
             m.state.hp = (m.state.hp - def.nutrition.max(5)).max(1);
             let before = m.state.hp;
-            match m.eat(&def, &catalog) {
+            match m.eat(&def, &catalog, &rules.hunger) {
                 Ok(_) if m.state.hp > before => {
                     t.next_step("eating heals HP");
                 }
@@ -337,7 +338,7 @@ pub fn run(
                 );
                 return;
             };
-            match party.members[idx].eat(&def, &catalog) {
+            match party.members[idx].eat(&def, &catalog, &rules.hunger) {
                 Err(e) if e.contains("かたくて") => t.next_step("too-hard food is refused"),
                 Err(e) => fail(&t, "eat-hard", format!("想定外の拒否理由: {e}"), &mut exit),
                 Ok(_) => fail(&t, "eat-hard", format!("{}を食べられてしまった", def.name), &mut exit),
@@ -996,9 +997,13 @@ pub fn run_combat(
                             .zip(&t.hp_before)
                             .all(|(m, &b)| m.state.hp <= b);
                         if interrupted && no_heal && log.contains("モンスター") {
-                            println!("[autotest] PASS rest is blocked near a monster");
-                            println!("[autotest] ALL PASS (22 steps)");
-                            exit.send(AppExit::Success);
+                            // Clean up the sentinel and hand off to hunger steps.
+                            resting.active = false;
+                            data.open = false;
+                            if let Some(e) = t.monster_ent.take() {
+                                commands.entity(e).despawn();
+                            }
+                            t.next_step("rest is blocked near a monster");
                         } else {
                             fail(&t, "rest-blocked", format!("interrupted={interrupted} no_heal={no_heal}"), &mut exit);
                         }
@@ -1006,6 +1011,160 @@ pub fn run_combat(
                 }
             }
         }
+
+        _ => {}
+    }
+}
+
+// ==================================================================== hunger steps
+
+use crate::rules::RulesConfig;
+
+/// Steps 23–26 (plan6.5): satiety drain, feeding, starvation, and rest-while-
+/// starving. Kept separate from `run_combat` so neither exceeds the 16-parameter
+/// system limit. Runs once `run_combat` advances `step` past 22.
+#[allow(clippy::too_many_arguments)]
+pub fn run_hunger(
+    mut t: ResMut<AutoTest>,
+    mut party: ResMut<Party>,
+    item_catalog: Res<ItemCatalog>,
+    clock: Res<GameClock>,
+    log: Res<MessageLog>,
+    rules: Res<RulesConfig>,
+    mut screen: ResMut<crate::game_state::DataScreen>,
+    mut resting: ResMut<crate::data_screen::Resting>,
+    mut exit: EventWriter<AppExit>,
+) {
+    if t.step < 23 || t.fatal.is_some() {
+        return;
+    }
+    let fail = |t: &AutoTest, name: &str, why: String, exit: &mut EventWriter<AppExit>| {
+        eprintln!("[autotest] FAIL {name}: {why}");
+        eprintln!("[autotest] {} step(s) passed before the failure", t.step);
+        exit.send(AppExit::error());
+    };
+    let h = &rules.hunger;
+    if !h.enabled {
+        fail(&t, "hunger", "sample の hunger が無効(project.ron の rules を確認)".into(), &mut exit);
+        return;
+    }
+
+    match t.step {
+        // ---- 23: satiety drains over time ------------------------------------
+        23 => match t.phase {
+            0 => {
+                for m in &mut party.members {
+                    m.state.satiety = h.satiety_max;
+                }
+                t.baseline = h.satiety_max;
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            _ => {
+                // After ~5 drain intervals, satiety must have fallen accordingly.
+                let elapsed = clock.cycle - t.mark_cycle;
+                if elapsed >= h.drain_interval_cycles * 5 {
+                    let sat = party.members[0].state.satiety;
+                    let expected_drop = (elapsed / h.drain_interval_cycles) as i32;
+                    // Allow ±1 for where the frame boundary lands.
+                    if sat <= t.baseline - expected_drop + 1 && sat < t.baseline {
+                        t.next_step("hunger-drain: satiety falls over time");
+                    } else {
+                        fail(&t, "hunger-drain", format!("satiety {sat}, 期待 ≈ {}", t.baseline - expected_drop), &mut exit);
+                    }
+                }
+            }
+        },
+
+        // ---- 24: eating restores satiety (and HP, as before) -----------------
+        24 => {
+            // Find an edible, nutritious item and a member who can bite it.
+            let mut defs: Vec<_> = item_catalog.iter().filter(|d| d.nutrition > 0 && !d.important).collect();
+            defs.sort_by(|a, b| a.id.cmp(&b.id));
+            let pick = defs.iter().find_map(|d| {
+                party
+                    .members
+                    .iter()
+                    .position(|m| m.effective_stats(&item_catalog).get(StatKind::Bite) >= d.hardness)
+                    .map(|i| (i, (*d).clone()))
+            });
+            let Some((idx, def)) = pick else {
+                fail(&t, "hunger-eat", "食べられる栄養アイテムが無い".into(), &mut exit);
+                return;
+            };
+            let m = &mut party.members[idx];
+            m.state.satiety = 100;
+            m.state.hp = (m.state.hp - def.nutrition.max(5)).max(1);
+            let (sat_before, hp_before) = (m.state.satiety, m.state.hp);
+            match m.eat(&def, &item_catalog, h) {
+                Ok(_) => {
+                    let expected = (sat_before + def.nutrition * h.satiety_per_nutrition).min(h.satiety_max);
+                    if m.state.satiety == expected && m.state.hp > hp_before {
+                        t.next_step("hunger-eat: eating restores satiety + HP");
+                    } else {
+                        fail(&t, "hunger-eat", format!("satiety {} 期待 {expected}, hp {} → {}", m.state.satiety, hp_before, m.state.hp), &mut exit);
+                    }
+                }
+                Err(e) => fail(&t, "hunger-eat", format!("食べられなかった: {e}"), &mut exit),
+            }
+        }
+
+        // ---- 25: starvation damages HP + freezes concentration + warns -------
+        25 => match t.phase {
+            0 => {
+                for m in &mut party.members {
+                    m.state.satiety = 0;
+                    m.state.down = false;
+                    m.state.concentration = 0; // room to (not) recover
+                }
+                t.hp_before = party.members.iter().map(|m| m.state.hp).collect();
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            _ => {
+                if clock.cycle >= t.mark_cycle + 12 {
+                    let hurt = party.members.iter().zip(&t.hp_before).all(|(m, &b)| m.state.hp < b || m.state.hp == 0);
+                    let no_focus = party.members.iter().all(|m| m.state.concentration == 0);
+                    let warned = log.contains("うえじ") || log.contains("おなか");
+                    if hurt && no_focus && warned {
+                        t.next_step("hunger-starve: HP falls, focus frozen, warned");
+                    } else {
+                        fail(&t, "hunger-starve", format!("hurt={hurt} no_focus={no_focus} warned={warned}"), &mut exit);
+                    }
+                }
+            }
+        },
+
+        // ---- 26: resting while starving does not heal ------------------------
+        26 => match t.phase {
+            0 => {
+                for m in &mut party.members {
+                    m.state.satiety = 0;
+                    m.state.down = false;
+                    m.state.hp = 20; // mid, room to heal if the gate failed
+                }
+                screen.open = true;
+                resting.active = true;
+                t.hp_before = party.members.iter().map(|m| m.state.hp).collect();
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            _ => {
+                if clock.cycle >= t.mark_cycle + h.drain_interval_cycles * 3 {
+                    // Rest must not raise HP while starving (starvation may lower it).
+                    let no_heal = party.members.iter().zip(&t.hp_before).all(|(m, &b)| m.state.hp <= b);
+                    if no_heal {
+                        screen.open = false;
+                        resting.active = false;
+                        println!("[autotest] PASS hunger-rest: no healing while starving");
+                        println!("[autotest] ALL PASS (26 steps)");
+                        exit.send(AppExit::Success);
+                    } else {
+                        fail(&t, "hunger-rest", "飢餓中の休息でHPが回復した".into(), &mut exit);
+                    }
+                }
+            }
+        },
 
         _ => {}
     }

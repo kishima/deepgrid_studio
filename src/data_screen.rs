@@ -357,6 +357,7 @@ fn action_btn(row: &mut ChildBuilder, font: &Handle<Font>, kind: ActionKind, lab
 
 /// Per-frame refresh of the overlay's text + selection highlight.
 #[allow(clippy::type_complexity)]
+#[allow(clippy::too_many_arguments)]
 pub fn refresh_data_screen(
     screen: Res<DataScreen>,
     party: Res<Party>,
@@ -364,6 +365,7 @@ pub fn refresh_data_screen(
     selected: Res<SelectedMember>,
     selected_slot: Res<SelectedSlot>,
     resting: Res<Resting>,
+    rules: Res<crate::rules::RulesConfig>,
     mut sets: ParamSet<(
         Query<(&SlotButton, &mut BackgroundColor)>,
         Query<(&SlotLabel, &mut Text)>,
@@ -437,8 +439,13 @@ pub fn refresh_data_screen(
     {
         let mut p = sets.p3();
         if let Ok(mut t) = p.get_single_mut() {
+            let satiety = if rules.hunger.enabled {
+                format!("  満腹度 {}/{}", member.state.satiety, rules.hunger.satiety_max)
+            } else {
+                String::new()
+            };
             **t = format!(
-                "{}  総合Lv {}  |  HP {}/{}  MP {}/{}  集 {}/{}\n\
+                "{}  総合Lv {}  |  HP {}/{}  MP {}/{}  集 {}/{}{satiety}\n\
                  攻 {} 防 {} 速 {} 運搬 {} 肺 {} 耐熱 {} 耐毒 {}  |  経歴: {}",
                 member.character.first_name,
                 eff.overall_level(),
@@ -491,6 +498,7 @@ pub fn data_screen_interactions(
     mut resting: ResMut<Resting>,
     mut log: ResMut<MessageLog>,
     enemy_near: Res<crate::monster::EnemyNear>,
+    rules: Res<crate::rules::RulesConfig>,
     mut place: EventWriter<PlaceRequest>,
     tabs: Query<(&Interaction, &MemberTab), Changed<Interaction>>,
     slots: Query<(&Interaction, &SlotButton), Changed<Interaction>>,
@@ -555,7 +563,7 @@ pub fn data_screen_interactions(
                     .and_then(|it| catalog.get(&it.def_id))
                     .cloned();
                 match def {
-                    Some(def) => match member.eat(&def, &catalog) {
+                    Some(def) => match member.eat(&def, &catalog, &rules.hunger) {
                         Ok(msg) => {
                             member.inventory.take(slot);
                             selected_slot.slot = None;
@@ -588,6 +596,7 @@ pub fn rest_tick(
     screen: Res<DataScreen>,
     mut resting: ResMut<Resting>,
     enemy_near: Res<crate::monster::EnemyNear>,
+    rules: Res<crate::rules::RulesConfig>,
     mut log: ResMut<MessageLog>,
     catalog: Res<ItemCatalog>,
     mut party: ResMut<Party>,
@@ -607,6 +616,10 @@ pub fn rest_tick(
         *accum -= REST_CYCLES;
         for member in &mut party.members {
             if member.state.down {
+                continue;
+            }
+            // Starving members don't recover from rest (plan6.5).
+            if rules.hunger.enabled && member.state.satiety == 0 {
                 continue;
             }
             let eff = member.effective_stats(&catalog);

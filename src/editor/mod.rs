@@ -415,6 +415,7 @@ mod tests {
             party: Vec::new(),
             items: Vec::new(),
             monsters: Vec::new(),
+            rules: crate::rules::RulesConfig::default(),
         }
     }
 

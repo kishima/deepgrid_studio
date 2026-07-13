@@ -22,6 +22,7 @@ use crate::dungeon::level::{Floor, Level};
 use crate::dungeon::{Block, Dungeon, Facing, GridPos};
 use crate::item::{Inventory, ItemCatalog, ItemDef, ItemInstance, ItemPlacement};
 use crate::monster::{MonsterCatalog, MonsterDef, MonsterPlacement};
+use crate::rules::RulesConfig;
 
 /// `project.ron` on disk.
 ///
@@ -49,6 +50,10 @@ struct ProjectMeta {
     /// Monster-definitions file, project-relative (v4+). Empty = no monsters.
     #[serde(default)]
     monsters: String,
+    /// Per-project game rules (plan6.5). `#[serde(default)]` so pre-plan6.5
+    /// projects (no `rules` block) load with everything at its default.
+    #[serde(default)]
+    rules: RulesConfig,
 }
 
 /// One floor of the on-disk map: `height` rows of `width` characters.
@@ -134,6 +139,8 @@ pub struct Project {
     pub items: Vec<ItemDef>,
     /// All monster definitions (empty for a pre-v4 project).
     pub monsters: Vec<MonsterDef>,
+    /// Per-project game rules (defaults for a pre-plan6.5 project).
+    pub rules: RulesConfig,
 }
 
 impl Project {
@@ -180,9 +187,11 @@ impl Project {
                         }
                     }
                 }
+                let mut state = CharacterState::full(character);
+                state.satiety = self.rules.hunger.satiety_max;
                 PartyMember {
                     character: character.clone(),
-                    state: CharacterState::full(character),
+                    state,
                     inventory,
                 }
             })
@@ -607,6 +616,7 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
         party: meta.party,
         items,
         monsters,
+        rules: meta.rules,
     })
 }
 
@@ -833,6 +843,7 @@ mod tests {
             party: vec!["knight".into()],
             items: vec![],
             monsters: vec![],
+            rules: RulesConfig::default(),
         };
         let party = project.build_party();
         assert_eq!(party.len(), 1);

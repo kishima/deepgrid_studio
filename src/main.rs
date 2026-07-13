@@ -17,6 +17,7 @@ mod floor_items;
 mod game_state;
 mod hazard;
 mod hud;
+mod hunger;
 mod item;
 mod monster;
 mod player;
@@ -24,6 +25,7 @@ mod portrait;
 mod project;
 mod render;
 mod rng;
+mod rules;
 
 use std::path::PathBuf;
 
@@ -111,6 +113,7 @@ fn run_play(project: Project) {
     .insert_resource(party)
     .insert_resource(catalog)
     .insert_resource(monster_catalog)
+    .insert_resource(project.rules.clone())
     .insert_resource(initial_items)
     .insert_resource(initial_monsters)
     .insert_resource(ScriptedInput::default())
@@ -174,6 +177,7 @@ fn run_play(project: Project) {
             clock::recover_concentration,
             character::tick_effects,
             hazard::hazard_tick,
+            hunger::hunger_tick,
             data_screen::rest_tick,
             monster::monster_ai,
             monster::monster_attacks,
@@ -228,6 +232,14 @@ fn run_play(project: Project) {
                     .after(monster::player_actions)
                     .after(monster::monster_attacks)
                     .after(monster::monster_lifecycle),
+            )
+            .add_systems(
+                Update,
+                autotest::run_hunger
+                    .after(autotest::run_combat)
+                    .after(hunger::hunger_tick)
+                    .after(clock::recover_concentration)
+                    .after(data_screen::rest_tick),
             );
     }
 

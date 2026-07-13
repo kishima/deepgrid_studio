@@ -35,4 +35,16 @@
     // Monster definitions (≤ limits.max_monster_kinds); placements live in the
     // level files (≤ monster_kinds_per_level distinct ids per level).
     monsters: "monsters.ron",
+    // Per-project game rules (plan6.5). Hunger is enabled here as a data example;
+    // omitting this whole block (or `enabled: false`) turns it off entirely.
+    rules: (
+        hunger: (
+            enabled: true,
+            satiety_max: 1000,
+            drain_interval_cycles: 10,
+            starvation_damage: 1,
+            satiety_per_nutrition: 10,
+            warn_ratio: 0.25,
+        ),
+    ),
 )

@@ -227,6 +227,9 @@ pub struct CharacterState {
     pub effects: Vec<ActiveEffect>,
     /// Remaining cycles of lingering poison (plan5 liquid damage).
     pub poison_remaining: u32,
+    /// Satiety / 満腹度 (plan6.5). Only meaningful when hunger rules are enabled;
+    /// starts full. Drains over time, refilled by eating.
+    pub satiety: i32,
     /// Accumulated experience toward the next level (plan6).
     pub exp: i32,
     /// 防ぐ: halve the next incoming hit, then clear (plan6).
@@ -245,6 +248,8 @@ impl CharacterState {
             down: false,
             effects: Vec::new(),
             poison_remaining: 0,
+            // Full by default; build_party clamps it to the project's satiety_max.
+            satiety: crate::rules::DEFAULT_SATIETY_MAX,
             exp: 0,
             guarding: false,
             concentrating: false,
@@ -274,9 +279,15 @@ impl PartyMember {
     }
 
     /// Try to eat the item defined by `def`: fails on important items or when
-    /// too hard to bite. On success applies nutrition + effects and returns the
-    /// log line; the caller removes the consumed instance.
-    pub fn eat(&mut self, def: &crate::item::ItemDef, catalog: &ItemCatalog) -> Result<String, String> {
+    /// too hard to bite. On success applies nutrition (HP, the original rule) plus
+    /// — when hunger is enabled — satiety, and its effects; returns the log line.
+    /// The caller removes the consumed instance.
+    pub fn eat(
+        &mut self,
+        def: &crate::item::ItemDef,
+        catalog: &ItemCatalog,
+        hunger: &crate::rules::HungerRules,
+    ) -> Result<String, String> {
         if def.important {
             return Err(format!("{}は だいじなものだ", def.name));
         }
@@ -286,6 +297,12 @@ impl PartyMember {
         }
         let max_hp = self.effective_stats(catalog).get(StatKind::MaxHp);
         self.state.hp = (self.state.hp + def.nutrition).clamp(0, max_hp.max(0));
+        // Satiety moves with nutrition (negative nutrition lowers it too).
+        if hunger.enabled {
+            self.state.satiety = (self.state.satiety
+                + def.nutrition * hunger.satiety_per_nutrition)
+                .clamp(0, hunger.satiety_max);
+        }
         for e in &def.effects {
             self.state.effects.push(ActiveEffect {
                 stat: e.stat,
@@ -502,6 +519,28 @@ mod tests {
         assert_eq!(t.character.stats.level, 2);
         assert_eq!(t.character.stats.max_hp, 100); // no growth
         assert_eq!(t.character.stats.attack, 10);
+    }
+
+    #[test]
+    fn eat_feeds_satiety_only_when_enabled() {
+        use crate::item::{ItemCatalog, ItemDef};
+        use crate::rules::HungerRules;
+        let cat = ItemCatalog::default();
+        let bread: ItemDef =
+            ron::from_str(r#"(id:"b",name:"パン",kind:General,nutrition:20)"#).unwrap();
+
+        // Enabled: satiety += nutrition × factor, clamped to max.
+        let mut m = member(GrowthType::Average, 1);
+        m.state.satiety = 100;
+        let on = HungerRules { enabled: true, satiety_per_nutrition: 10, satiety_max: 1000, ..Default::default() };
+        m.eat(&bread, &cat, &on).unwrap();
+        assert_eq!(m.state.satiety, 300);
+
+        // Disabled: satiety untouched (the original HP rule is unaffected either way).
+        let mut m2 = member(GrowthType::Average, 1);
+        m2.state.satiety = 100;
+        m2.eat(&bread, &cat, &HungerRules::default()).unwrap();
+        assert_eq!(m2.state.satiety, 100);
     }
 
     #[test]
