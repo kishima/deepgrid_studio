@@ -4,11 +4,15 @@
 //! (the 3D runtime) or edit mode (the egui map editor). All logic lives in the
 //! modules.
 
+mod character;
+mod clock;
 mod config;
 mod debug_shot;
 mod dungeon;
 mod editor;
+mod hud;
 mod player;
+mod portrait;
 mod project;
 mod props;
 mod render;
@@ -17,8 +21,10 @@ use std::path::PathBuf;
 
 use bevy::prelude::*;
 
+use clock::{CycleTick, GameClock};
 use dungeon::DoorStates;
-use player::ScriptedInput;
+use hud::MessageLog;
+use player::{PlayerFell, ScriptedInput};
 use project::Project;
 
 /// Default project loaded when `--project` is not given.
@@ -69,6 +75,7 @@ fn main() {
 fn run_play(project: Project) {
     let doors = DoorStates::new(project.limits.door_kinds_per_level);
     let dungeon = project.levels[0].to_dungeon();
+    let party = project.build_party();
 
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -83,7 +90,12 @@ fn run_play(project: Project) {
         .insert_resource(project.limits.clone())
         .insert_resource(dungeon)
         .insert_resource(doors)
+        .insert_resource(party)
         .insert_resource(ScriptedInput::default())
+        .insert_resource(MessageLog::default())
+        .insert_resource(GameClock::default())
+        .add_event::<PlayerFell>()
+        .add_event::<CycleTick>()
         .add_systems(
             Startup,
             (
@@ -91,6 +103,10 @@ fn run_play(project: Project) {
                 player::setup_player,
                 props::setup_props,
                 debug_shot::setup_debug_script,
+                hud::greet,
+                // Portraits build the render-target images the HUD cards show, so
+                // the HUD must spawn after them.
+                (portrait::setup_portraits, hud::setup_hud).chain(),
             ),
         )
         .add_systems(
@@ -100,6 +116,19 @@ fn run_play(project: Project) {
                 render::update_door_visibility,
                 props::attach_prop_animations,
                 debug_shot::debug_screenshot,
+            ),
+        )
+        // Cycle time: tick the clock, then run the on-cycle systems this frame.
+        .add_systems(Update, (clock::tick_clock, clock::recover_concentration).chain())
+        // Fall damage must read this frame's `PlayerFell` (written by movement).
+        .add_systems(
+            Update,
+            (
+                character::apply_fall_damage.after(player::player_movement),
+                hud::update_status_bars,
+                hud::update_cards,
+                hud::update_messages,
+                portrait::freeze_portraits,
             ),
         )
         .run();

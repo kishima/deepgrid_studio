@@ -1,10 +1,11 @@
-// DeepGrid Studio sample project (plan3). A "project" is one directory holding
-// this metadata file plus a levels/ folder of map-format-v2 level files.
-// Read/written through src/project.rs. `limits` is the LimitsConfig (project.md
-// 「上限値の扱い」) — the single source of truth for map sizing and door kinds.
+// DeepGrid Studio sample project. A "project" is one directory holding this
+// metadata file, a levels/ folder of map-format-v2 level files, and (v2+)
+// characters.ron. Read/written through src/project.rs. `limits` is the
+// LimitsConfig (project.md「上限値の扱い」) — the single source of truth for map
+// sizing, door kinds, character count and party size.
 (
     name: "Sample Dungeon",
-    version: 1,
+    version: 2,
     limits: (
         max_levels: 14,
         floors_per_level: 5,
@@ -24,4 +25,8 @@
         demo_message_lines: 160,
     ),
     levels: ["levels/level00.ron"],
+    // Registered characters (≤ limits.max_characters) and the active party
+    // (≤ limits.party_size, ids referencing characters.ron).
+    characters: "characters.ron",
+    party: ["knight", "mage", "rogue_hooded", "rogue"],
 )

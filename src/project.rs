@@ -16,11 +16,16 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::character::{Character, CharacterState, Party, PartyMember};
 use crate::config::LimitsConfig;
 use crate::dungeon::level::{Floor, Level};
 use crate::dungeon::{Block, Dungeon, Facing, GridPos};
 
 /// `project.ron` on disk.
+///
+/// `characters` / `party` are `#[serde(default)]` so a version-1 project (which
+/// predates characters) still parses: they come back empty and the runtime
+/// starts with no party (project.md「上限値の扱い」/ plan4 backward-compat).
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ProjectMeta {
     name: String,
@@ -29,6 +34,13 @@ struct ProjectMeta {
     limits: LimitsConfig,
     /// Level file paths relative to the project dir; order = level number.
     levels: Vec<String>,
+    /// Registered-characters file, project-relative (v2+). Empty string (the
+    /// default when the field is absent, as in v1) means "no characters file".
+    #[serde(default)]
+    characters: String,
+    /// Party roster: character ids, in slot order (v2+). Empty in v1.
+    #[serde(default)]
+    party: Vec<String>,
 }
 
 /// One floor of the on-disk map: `height` rows of `width` characters.
@@ -83,16 +95,82 @@ impl LevelData {
     }
 }
 
-/// Project-format version this build reads/writes.
-pub const PROJECT_VERSION: u32 = 1;
+/// Project-format version this build writes. Version 1 (no characters/party) is
+/// still accepted on load for backward compatibility (plan4).
+pub const PROJECT_VERSION: u32 = 2;
 
-/// A loaded project: metadata, limits, and every level in memory.
+/// A loaded project: metadata, limits, levels, and (v2+) registered characters
+/// plus the party roster (character ids).
 pub struct Project {
     pub dir: PathBuf,
     pub name: String,
     pub limits: LimitsConfig,
     pub level_paths: Vec<String>,
     pub levels: Vec<LevelData>,
+    /// All registered characters (empty for a v1 project).
+    pub characters: Vec<Character>,
+    /// Party roster as character ids, validated against `characters`.
+    pub party: Vec<String>,
+}
+
+impl Project {
+    /// Build the runtime [`Party`] resource: resolve each roster id to its
+    /// character and give it full starting state. Ids are guaranteed present by
+    /// load-time validation.
+    pub fn build_party(&self) -> Party {
+        let members = self
+            .party
+            .iter()
+            .filter_map(|id| self.characters.iter().find(|c| &c.id == id))
+            .map(|character| PartyMember {
+                character: character.clone(),
+                state: CharacterState::full(character),
+            })
+            .collect();
+        Party { members }
+    }
+}
+
+/// Parse and validate a `characters.ron` (a `Vec<Character>`) against `limits`:
+/// count ≤ `max_characters` and ids unique.
+fn characters_from_ron(
+    text: &str,
+    limits: &LimitsConfig,
+    what: &str,
+) -> Result<Vec<Character>, String> {
+    let characters: Vec<Character> =
+        ron::from_str(text).map_err(|e| format!("failed to parse {what}: {e}"))?;
+    if characters.len() > limits.max_characters {
+        return Err(format!(
+            "{what} has {} characters, exceeds max_characters {}",
+            characters.len(),
+            limits.max_characters
+        ));
+    }
+    for (i, c) in characters.iter().enumerate() {
+        if characters[..i].iter().any(|o| o.id == c.id) {
+            return Err(format!("{what}: duplicate character id '{}'", c.id));
+        }
+    }
+    Ok(characters)
+}
+
+/// Validate the party roster against the loaded characters and `limits`: size ≤
+/// `party_size` and every id exists.
+fn validate_party(party: &[String], characters: &[Character], limits: &LimitsConfig) -> Result<(), String> {
+    if party.len() > limits.party_size {
+        return Err(format!(
+            "party has {} members, exceeds party_size {}",
+            party.len(),
+            limits.party_size
+        ));
+    }
+    for id in party {
+        if !characters.iter().any(|c| &c.id == id) {
+            return Err(format!("party references unknown character id '{id}'"));
+        }
+    }
+    Ok(())
 }
 
 fn char_to_block(c: char) -> Option<Block> {
@@ -272,9 +350,9 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
     let meta: ProjectMeta =
         ron::from_str(&text).map_err(|e| format!("failed to parse {}: {e}", meta_path.display()))?;
 
-    if meta.version != PROJECT_VERSION {
+    if meta.version == 0 || meta.version > PROJECT_VERSION {
         return Err(format!(
-            "{}: unsupported project version {} (this build reads version {PROJECT_VERSION})",
+            "{}: unsupported project version {} (this build reads versions 1..={PROJECT_VERSION})",
             meta_path.display(),
             meta.version,
         ));
@@ -299,12 +377,32 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
         levels.push(level_from_ron(&text, &meta.limits, rel)?);
     }
 
+    // Characters + party (v2). A v1 project (or a v2 one that omits the
+    // characters file) loads with no party; the HUD then hides the status window.
+    let characters = if meta.characters.is_empty() {
+        if meta.party.is_empty() {
+            eprintln!(
+                "deepgrid_studio: {} has no characters/party — starting with an empty party",
+                meta_path.display()
+            );
+        }
+        Vec::new()
+    } else {
+        let path = dir.join(&meta.characters);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        characters_from_ron(&text, &meta.limits, &meta.characters)?
+    };
+    validate_party(&meta.party, &characters, &meta.limits)?;
+
     Ok(Project {
         dir,
         name: meta.name,
         limits: meta.limits,
         level_paths: meta.levels,
         levels,
+        characters,
+        party: meta.party,
     })
 }
 
@@ -383,5 +481,107 @@ mod tests {
         lvl.level.floors[1].blocks[0] = Block::Wall;
         let ron = level_to_ron(&lvl).expect("serialize");
         assert!(level_from_ron(&ron, &limits, "bad").is_err());
+    }
+
+    use crate::character::{Character, GrowthType, Stats};
+
+    fn sample_character(id: &str) -> Character {
+        Character {
+            id: id.to_string(),
+            first_name: "テスト".into(),
+            last_name: "姓".into(),
+            gender: "男".into(),
+            height_cm: 175.0,
+            weight_kg: 68.0,
+            birth_date: "1000-01-01".into(),
+            age: 22,
+            likes: "剣".into(),
+            dislikes: "毒".into(),
+            background: "戦士。\n二行目。".into(),
+            growth: GrowthType::Average,
+            stats: Stats {
+                level: 3,
+                max_hp: 120,
+                max_mp: 20,
+                attack: 15,
+                defense: 12,
+                agility: 10,
+                throwing: 8,
+                carrying: 14,
+                lung_capacity: 9,
+                heat_resist: 7,
+                poison_resist: 6,
+                magic_knowledge: 4,
+                concentration: 30,
+                appraisal: 5,
+                stealing: 3,
+                bite: 2,
+            },
+            model: "models/party/knight.glb".into(),
+        }
+    }
+
+    #[test]
+    fn characters_ron_round_trip() {
+        let limits = LimitsConfig::default();
+        let original = vec![sample_character("knight"), sample_character("mage")];
+        let ron = ron::ser::to_string_pretty(&original, ron::ser::PrettyConfig::default())
+            .expect("serialize");
+        let restored = characters_from_ron(&ron, &limits, "characters.ron").expect("parse");
+        assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn rejects_duplicate_character_ids() {
+        let limits = LimitsConfig::default();
+        let dup = vec![sample_character("knight"), sample_character("knight")];
+        let ron = ron::ser::to_string_pretty(&dup, ron::ser::PrettyConfig::default()).unwrap();
+        assert!(characters_from_ron(&ron, &limits, "characters.ron").is_err());
+    }
+
+    #[test]
+    fn rejects_too_many_characters() {
+        let limits = LimitsConfig {
+            max_characters: 1,
+            ..LimitsConfig::default()
+        };
+        let two = vec![sample_character("a"), sample_character("b")];
+        let ron = ron::ser::to_string_pretty(&two, ron::ser::PrettyConfig::default()).unwrap();
+        assert!(characters_from_ron(&ron, &limits, "characters.ron").is_err());
+    }
+
+    #[test]
+    fn party_validation() {
+        let limits = LimitsConfig::default();
+        let chars = vec![sample_character("knight"), sample_character("mage")];
+        // Good roster resolves.
+        assert!(validate_party(&["knight".into(), "mage".into()], &chars, &limits).is_ok());
+        // Unknown id is rejected.
+        assert!(validate_party(&["ghost".into()], &chars, &limits).is_err());
+        // Oversize roster is rejected.
+        let small = LimitsConfig {
+            party_size: 1,
+            ..LimitsConfig::default()
+        };
+        assert!(validate_party(&["knight".into(), "mage".into()], &chars, &small).is_err());
+    }
+
+    #[test]
+    fn build_party_gives_full_state() {
+        let chars = vec![sample_character("knight")];
+        let project = Project {
+            dir: PathBuf::from("/tmp/x"),
+            name: "t".into(),
+            limits: LimitsConfig::default(),
+            level_paths: vec![],
+            levels: vec![],
+            characters: chars,
+            party: vec!["knight".into()],
+        };
+        let party = project.build_party();
+        assert_eq!(party.len(), 1);
+        assert_eq!(party.members[0].state.hp, 120);
+        assert_eq!(party.members[0].state.concentration, 30);
+        assert!(!party.members[0].state.down);
     }
 }

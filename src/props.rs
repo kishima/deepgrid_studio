@@ -31,6 +31,29 @@ const BARREL_SCALE: f32 = 0.35;
 const ANIM_IDLE: usize = 40;
 const ANIM_IDLE_COMBAT: usize = 42;
 
+/// Build a `(SceneRoot, PropAnimation)` for the glTF at `path`, set up to loop
+/// animation `anim_index` once its `AnimationPlayer` appears (started by
+/// [`attach_prop_animations`]). Shared by the showcase props here and plan4's
+/// portrait rigs (portrait.rs).
+pub fn animated_scene(
+    asset_server: &AssetServer,
+    graphs: &mut Assets<AnimationGraph>,
+    path: &str,
+    anim_index: usize,
+) -> (SceneRoot, PropAnimation) {
+    let scene = SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(path.to_string())));
+    let (graph, node) = AnimationGraph::from_clip(
+        asset_server.load(GltfAssetLabel::Animation(anim_index).from_asset(path.to_string())),
+    );
+    (
+        scene,
+        PropAnimation {
+            graph: graphs.add(graph),
+            node,
+        },
+    )
+}
+
 /// World translation for standing on the floor surface of tile `(x, y, floor)`.
 fn on_floor(x: i32, y: i32, floor: usize) -> Vec3 {
     Vec3::new(
@@ -47,17 +70,7 @@ pub fn setup_props(
     mut graphs: ResMut<Assets<AnimationGraph>>,
 ) {
     let mut animated = |path: &'static str, anim_index: usize| -> (SceneRoot, PropAnimation) {
-        let scene = SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(path)));
-        let (graph, node) = AnimationGraph::from_clip(
-            asset_server.load(GltfAssetLabel::Animation(anim_index).from_asset(path)),
-        );
-        (
-            scene,
-            PropAnimation {
-                graph: graphs.add(graph),
-                node,
-            },
-        )
+        animated_scene(&asset_server, &mut graphs, path, anim_index)
     };
 
     // Skeleton minion on floor 1, two tiles south of the start, facing the

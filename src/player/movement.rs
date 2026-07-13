@@ -44,6 +44,14 @@ pub enum Command {
     ToggleDoor,
 }
 
+/// Emitted once when a fall finishes, carrying how many floors were dropped
+/// (≥1). Fall damage (character.rs) reads this; the animation itself stays in
+/// real seconds.
+#[derive(Event, Clone, Copy)]
+pub struct PlayerFell {
+    pub floors: u32,
+}
+
 /// Marker for the first-person camera entity.
 #[derive(Component)]
 pub struct PlayerCamera;
@@ -89,6 +97,9 @@ pub struct MoveAnim {
     elapsed: f32,
     buffered: Option<Command>,
     input_locked: bool,
+    /// Floors dropped by the fall currently in flight; a `PlayerFell` fires with
+    /// this when the animation finishes, then it resets to 0.
+    pending_fall: u32,
 }
 
 impl MoveAnim {
@@ -237,6 +248,7 @@ fn push_fall(anim: &mut MoveAnim, x: i32, y: i32, from_floor: usize, to_floor: u
     }
     anim.input_locked = true;
     anim.buffered = None;
+    anim.pending_fall = (from_floor - to_floor) as u32;
 }
 
 /// Begin a grid move. Rejected (no animation) if the exit/entry rules forbid it.
@@ -383,6 +395,7 @@ pub fn player_movement(
     mut player: ResMut<Player>,
     mut anim: ResMut<MoveAnim>,
     mut script: ResMut<ScriptedInput>,
+    mut fell: EventWriter<PlayerFell>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
     let Ok(mut transform) = cameras.get_single_mut() else {
@@ -402,6 +415,13 @@ pub fn player_movement(
             anim.elapsed = 0.0;
             if anim.segments.is_empty() {
                 anim.input_locked = false;
+                // A fall just landed — announce it so fall damage can apply.
+                if anim.pending_fall > 0 {
+                    fell.send(PlayerFell {
+                        floors: anim.pending_fall,
+                    });
+                    anim.pending_fall = 0;
+                }
                 // Snap exactly to the canonical logical pose to erase drift.
                 *transform = canonical_transform(&player);
             }

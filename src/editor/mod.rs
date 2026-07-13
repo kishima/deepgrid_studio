@@ -409,6 +409,8 @@ mod tests {
             limits: LimitsConfig::default(),
             level_paths: vec!["levels/level00.ron".to_string()],
             levels: vec![level],
+            characters: Vec::new(),
+            party: Vec::new(),
         }
     }
 

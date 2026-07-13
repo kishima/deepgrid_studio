@@ -19,6 +19,12 @@ bevy = { version = "0.15", default-features = false, features = [
     "bevy_pbr",
     "bevy_scene",
     "bevy_gltf",
+    # plan4: main-screen HUD (status/message windows) via bevy_ui.
+    # egui stays editor-only because bevy_egui draws to the window and isn't
+    # captured by Bevy's Screenshot (plan3 Step 6 / plan4 rationale).
+    "bevy_ui",
+    "bevy_text",
+    "default_font",
     "animation",
     "png",
     "tonemapping_luts",
