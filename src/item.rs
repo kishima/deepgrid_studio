@@ -234,6 +234,11 @@ impl ItemCatalog {
     pub fn get(&self, id: &str) -> Option<&ItemDef> {
         self.defs.get(id)
     }
+
+    /// All definitions, in map order (callers needing determinism sort by id).
+    pub fn iter(&self) -> impl Iterator<Item = &ItemDef> {
+        self.defs.values()
+    }
 }
 
 /// Addresses one inventory slot.

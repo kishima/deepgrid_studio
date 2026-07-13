@@ -57,6 +57,11 @@ impl MessageLog {
         }
     }
 
+    /// Whether any retained line contains `needle` (used by the autotest driver).
+    pub fn contains(&self, needle: &str) -> bool {
+        self.lines.iter().any(|l| l.contains(needle))
+    }
+
     /// The visible lines, oldest-first, padded to [`VISIBLE_LINES`] with blanks
     /// so the window's line rows map 1:1 top→bottom.
     fn visible(&self) -> Vec<&str> {

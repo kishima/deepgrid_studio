@@ -4,6 +4,7 @@
 //! (the 3D runtime) or edit mode (the egui map editor). All logic lives in the
 //! modules.
 
+mod autotest;
 mod character;
 mod clock;
 mod config;
@@ -169,6 +170,23 @@ fn run_play(project: Project) {
             hud::update_messages,
             portrait::freeze_portraits,
         ),
-    )
-    .run();
+    );
+
+    // Unattended acceptance tests (DEEPGRID_AUTOTEST=1): inject subjects before
+    // the floor items spawn, then drive/assert after the frame's game systems.
+    if autotest::enabled() {
+        app.init_resource::<autotest::AutoTest>()
+            .add_systems(
+                Startup,
+                autotest::prepare.before(floor_items::setup_floor_items),
+            )
+            .add_systems(
+                Update,
+                autotest::run
+                    .after(floor_items::handle_place)
+                    .after(hazard::hazard_tick),
+            );
+    }
+
+    app.run();
 }

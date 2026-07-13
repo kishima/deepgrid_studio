@@ -16,13 +16,14 @@ use crate::item::ItemCatalog;
 use crate::player::Player;
 
 /// Below this lung capacity, water drowns you (1 dmg/cycle). — 暫定
-const WATER_LUNG_THRESHOLD: i32 = 100;
+/// (pub: the autotest driver derives which members it expects to be hurt.)
+pub const WATER_LUNG_THRESHOLD: i32 = 100;
 const WATER_DAMAGE: i32 = 1;
 /// Below this heat resistance, fire burns you (3 dmg/cycle). — 暫定
 const FIRE_HEAT_THRESHOLD: i32 = 100;
 const FIRE_DAMAGE: i32 = 3;
-/// Below this poison resistance, poison afflicts you. — 暫定
-const POISON_RESIST_THRESHOLD: i32 = 100;
+/// Below this poison resistance, poison afflicts you. — 暫定 (pub: 同上)
+pub const POISON_RESIST_THRESHOLD: i32 = 100;
 const POISON_DAMAGE: i32 = 1;
 /// Poison lingers this many cycles after leaving the tile. — 暫定
 const POISON_LINGER_CYCLES: u32 = 32;

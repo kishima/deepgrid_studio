@@ -42,6 +42,7 @@ exec docker run --rm "${TTY_FLAGS[@]}" \
   -e WGPU_BACKEND="${WGPU_BACKEND:-vulkan}" \
   -e BEVY_ASSET_ROOT=/app \
   -e DEEPGRID_DEBUG_SHOT="${DEEPGRID_DEBUG_SHOT:-}" \
+  -e DEEPGRID_AUTOTEST="${DEEPGRID_AUTOTEST:-}" \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
   -v /mnt/wslg:/mnt/wslg \
   "$IMAGE" "$BIN" "$@"
