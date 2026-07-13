@@ -13,8 +13,31 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::clock::CycleTick;
 use crate::hud::MessageLog;
+use crate::item::{Inventory, ItemCatalog};
 use crate::player::PlayerFell;
+
+/// Identifies one ability field for item stat-effects (item.rs `StatEffect`).
+/// Mirrors the numeric fields of [`Stats`].
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StatKind {
+    MaxHp,
+    MaxMp,
+    Attack,
+    Defense,
+    Agility,
+    Throwing,
+    Carrying,
+    LungCapacity,
+    HeatResist,
+    PoisonResist,
+    MagicKnowledge,
+    Concentration,
+    Appraisal,
+    Stealing,
+    Bite,
+}
 
 /// Ability values (project.md「キャラクターの仕様」+ dandan_spec_things_editor.md).
 ///
@@ -55,6 +78,37 @@ pub struct Stats {
 }
 
 impl Stats {
+    /// Mutable access to the field named by `k`.
+    fn field_mut(&mut self, k: StatKind) -> &mut i32 {
+        match k {
+            StatKind::MaxHp => &mut self.max_hp,
+            StatKind::MaxMp => &mut self.max_mp,
+            StatKind::Attack => &mut self.attack,
+            StatKind::Defense => &mut self.defense,
+            StatKind::Agility => &mut self.agility,
+            StatKind::Throwing => &mut self.throwing,
+            StatKind::Carrying => &mut self.carrying,
+            StatKind::LungCapacity => &mut self.lung_capacity,
+            StatKind::HeatResist => &mut self.heat_resist,
+            StatKind::PoisonResist => &mut self.poison_resist,
+            StatKind::MagicKnowledge => &mut self.magic_knowledge,
+            StatKind::Concentration => &mut self.concentration,
+            StatKind::Appraisal => &mut self.appraisal,
+            StatKind::Stealing => &mut self.stealing,
+            StatKind::Bite => &mut self.bite,
+        }
+    }
+
+    pub fn get(&self, k: StatKind) -> i32 {
+        let mut copy = self.clone();
+        *copy.field_mut(k)
+    }
+
+    /// Add `delta` to the field named by `k` (used when folding effects in).
+    pub fn add(&mut self, k: StatKind, delta: i32) {
+        *self.field_mut(k) += delta;
+    }
+
     /// 総合レベル: the mean of every ability parameter (dandan_spec: a rough
     /// "strength" gauge). Derived on demand, never stored. Displayed from plan5's
     /// data screen; unused by the plan4 HUD (hence allowed-dead until then).
@@ -123,17 +177,37 @@ pub struct Character {
     pub stats: Stats,
     /// Portrait source: a project-relative or `assets/`-relative `.glb` path.
     pub model: String,
+    /// Starting item ids (plan5). Equippable ones are auto-equipped at party
+    /// build; the rest go to hands/pouch/backpack. `#[serde(default)]` so
+    /// pre-plan5 `characters.ron` still parses.
+    #[serde(default)]
+    pub items: Vec<String>,
+}
+
+/// A stat change currently in force from an *eaten* item. Equipment effects are
+/// derived from worn items instead (see [`Inventory::equipment_effects`]) so
+/// unequipping restores stats automatically without touching base values.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveEffect {
+    pub stat: StatKind,
+    pub delta: i32,
+    /// Cycles left, or `None` for a permanent effect (duration 0).
+    pub remaining: Option<u64>,
 }
 
 /// Mutable per-play state, split from the immutable `Character` definition. This
-/// is the save target (plan10).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// is the save target (plan10). No longer `Copy` — it owns the active-effect list.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CharacterState {
     pub hp: i32,
     pub mp: i32,
     pub concentration: i32,
     /// HP reached 0 → 気絶 (knocked out). No death/revive handling yet (plan7/8).
     pub down: bool,
+    /// Temporary/permanent stat effects from eaten items.
+    pub effects: Vec<ActiveEffect>,
+    /// Remaining cycles of lingering poison (plan5 liquid damage).
+    pub poison_remaining: u32,
 }
 
 impl CharacterState {
@@ -144,14 +218,62 @@ impl CharacterState {
             mp: character.stats.max_mp,
             concentration: character.stats.concentration,
             down: false,
+            effects: Vec::new(),
+            poison_remaining: 0,
         }
     }
 }
 
-/// One party slot: the character definition paired with its live state.
+/// One party slot: the character definition, its live state, and its inventory.
 pub struct PartyMember {
     pub character: Character,
     pub state: CharacterState,
+    pub inventory: Inventory,
+}
+
+impl PartyMember {
+    /// Effective stats = base + equipment effects + active (eaten) effects. Base
+    /// values are never mutated, so removing an effect restores them exactly.
+    pub fn effective_stats(&self, catalog: &ItemCatalog) -> Stats {
+        let mut s = self.character.stats.clone();
+        for (kind, delta) in self.inventory.equipment_effects(catalog) {
+            s.add(kind, delta);
+        }
+        for e in &self.state.effects {
+            s.add(e.stat, e.delta);
+        }
+        s
+    }
+
+    /// Try to eat the item defined by `def`: fails on important items or when
+    /// too hard to bite. On success applies nutrition + effects and returns the
+    /// log line; the caller removes the consumed instance.
+    pub fn eat(&mut self, def: &crate::item::ItemDef, catalog: &ItemCatalog) -> Result<String, String> {
+        if def.important {
+            return Err(format!("{}は だいじなものだ", def.name));
+        }
+        let bite = self.effective_stats(catalog).get(StatKind::Bite);
+        if def.hardness > bite {
+            return Err(format!("{}は かたくて食べられない", def.name));
+        }
+        let max_hp = self.effective_stats(catalog).get(StatKind::MaxHp);
+        self.state.hp = (self.state.hp + def.nutrition).clamp(0, max_hp.max(0));
+        for e in &def.effects {
+            self.state.effects.push(ActiveEffect {
+                stat: e.stat,
+                delta: e.delta,
+                remaining: if e.duration_cycles == 0 {
+                    None
+                } else {
+                    Some(e.duration_cycles)
+                },
+            });
+        }
+        if self.state.hp == 0 {
+            self.state.down = true;
+        }
+        Ok(format!("{}を食べた", def.name))
+    }
 }
 
 /// The active party (≤ `LimitsConfig.party_size`), resolved from the project's
@@ -169,6 +291,15 @@ impl Party {
 
     pub fn len(&self) -> usize {
         self.members.len()
+    }
+
+    /// The first member whose carried weight exceeds their (effective) carrying
+    /// capacity, if any. Party movement is a group action, so one overloaded
+    /// member stops everyone (plan5).
+    pub fn overweight_member(&self, catalog: &ItemCatalog) -> Option<usize> {
+        self.members.iter().position(|m| {
+            m.inventory.total_weight(catalog) > m.effective_stats(catalog).get(StatKind::Carrying)
+        })
     }
 }
 
@@ -202,6 +333,24 @@ pub fn apply_fall_damage(
             };
             log.push(line);
         }
+    }
+}
+
+/// Age out temporary eaten-item effects each cycle; permanent effects (duration
+/// 0 → `remaining: None`) are kept forever.
+pub fn tick_effects(mut ticks: EventReader<CycleTick>, mut party: ResMut<Party>) {
+    let cycles = ticks.read().count() as u64;
+    if cycles == 0 {
+        return;
+    }
+    for member in &mut party.members {
+        member.state.effects.retain_mut(|e| match &mut e.remaining {
+            None => true,
+            Some(remaining) => {
+                *remaining = remaining.saturating_sub(cycles);
+                *remaining > 0
+            }
+        });
     }
 }
 
@@ -258,6 +407,7 @@ mod tests {
                 ..stats(1)
             },
             model: "models/party/knight.glb".into(),
+            items: Vec::new(),
         };
         let st = CharacterState::full(&ch);
         assert_eq!((st.hp, st.mp, st.concentration, st.down), (100, 30, 40, false));

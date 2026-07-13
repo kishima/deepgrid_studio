@@ -20,6 +20,7 @@ use crate::character::{Character, CharacterState, Party, PartyMember};
 use crate::config::LimitsConfig;
 use crate::dungeon::level::{Floor, Level};
 use crate::dungeon::{Block, Dungeon, Facing, GridPos};
+use crate::item::{Inventory, ItemCatalog, ItemDef, ItemInstance, ItemPlacement};
 
 /// `project.ron` on disk.
 ///
@@ -41,6 +42,9 @@ struct ProjectMeta {
     /// Party roster: character ids, in slot order (v2+). Empty in v1.
     #[serde(default)]
     party: Vec<String>,
+    /// Item-definitions file, project-relative (v3+). Empty = no items.
+    #[serde(default)]
+    items: String,
 }
 
 /// One floor of the on-disk map: `height` rows of `width` characters.
@@ -62,14 +66,20 @@ struct MapFile {
     start_floor: usize,
     start_facing: Facing,
     floors: Vec<FloorRows>,
+    /// Item placements (map format v3; `#[serde(default)]` so v2 files load).
+    #[serde(default)]
+    items: Vec<ItemPlacement>,
 }
 
-/// An in-memory level: the mutable block grids plus the player's start.
+/// An in-memory level: the mutable block grids, the player's start, and item
+/// placements.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LevelData {
     pub start: GridPos,
     pub start_facing: Facing,
     pub level: Level,
+    /// Items placed on this level (plan5).
+    pub items: Vec<ItemPlacement>,
 }
 
 impl LevelData {
@@ -95,12 +105,12 @@ impl LevelData {
     }
 }
 
-/// Project-format version this build writes. Version 1 (no characters/party) is
-/// still accepted on load for backward compatibility (plan4).
-pub const PROJECT_VERSION: u32 = 2;
+/// Project-format version this build writes. Older versions are still accepted
+/// on load for backward compatibility (v1: no characters; v2: no items).
+pub const PROJECT_VERSION: u32 = 3;
 
-/// A loaded project: metadata, limits, levels, and (v2+) registered characters
-/// plus the party roster (character ids).
+/// A loaded project: metadata, limits, levels, registered characters + party
+/// roster (v2+), and item definitions (v3+).
 pub struct Project {
     pub dir: PathBuf,
     pub name: String,
@@ -111,24 +121,75 @@ pub struct Project {
     pub characters: Vec<Character>,
     /// Party roster as character ids, validated against `characters`.
     pub party: Vec<String>,
+    /// All item definitions (empty for a pre-v3 project).
+    pub items: Vec<ItemDef>,
 }
 
 impl Project {
+    /// Build the item catalog from the loaded definitions (ids already unique).
+    pub fn build_catalog(&self) -> ItemCatalog {
+        ItemCatalog::from_defs(self.items.clone(), "items").unwrap_or_default()
+    }
+
     /// Build the runtime [`Party`] resource: resolve each roster id to its
-    /// character and give it full starting state. Ids are guaranteed present by
-    /// load-time validation.
+    /// character, give it full starting state and an inventory holding its
+    /// starting items (equippable ones auto-equipped). Ids are guaranteed present
+    /// by load-time validation.
     pub fn build_party(&self) -> Party {
+        let catalog = self.build_catalog();
         let members = self
             .party
             .iter()
             .filter_map(|id| self.characters.iter().find(|c| &c.id == id))
-            .map(|character| PartyMember {
-                character: character.clone(),
-                state: CharacterState::full(character),
+            .map(|character| {
+                let mut inventory =
+                    Inventory::new(self.limits.pouch_size, self.limits.backpack_size);
+                for item_id in &character.items {
+                    let instance = ItemInstance::new(item_id.clone());
+                    match inventory.pickup(instance) {
+                        Ok(slot) => {
+                            // Auto-equip equippable starting gear so it shows worn.
+                            if catalog
+                                .get(item_id)
+                                .is_some_and(|d| d.is_equippable())
+                            {
+                                let _ = inventory.equip(slot, &catalog);
+                            }
+                        }
+                        Err(_) => {
+                            eprintln!(
+                                "deepgrid_studio: {}'s starting item '{item_id}' didn't fit",
+                                character.id
+                            );
+                        }
+                    }
+                }
+                PartyMember {
+                    character: character.clone(),
+                    state: CharacterState::full(character),
+                    inventory,
+                }
             })
             .collect();
         Party { members }
     }
+}
+
+/// Parse and validate an `items.ron` (a `Vec<ItemDef>`) against `limits`: count
+/// ≤ `max_item_kinds`. (Id uniqueness is checked when the catalog is built.)
+fn items_from_ron(text: &str, limits: &LimitsConfig, what: &str) -> Result<Vec<ItemDef>, String> {
+    let items: Vec<ItemDef> =
+        ron::from_str(text).map_err(|e| format!("failed to parse {what}: {e}"))?;
+    if items.len() > limits.max_item_kinds {
+        return Err(format!(
+            "{what} has {} item kinds, exceeds max_item_kinds {}",
+            items.len(),
+            limits.max_item_kinds
+        ));
+    }
+    // Surface duplicate ids here for a clearer message than catalog build.
+    ItemCatalog::from_defs(items.clone(), what)?;
+    Ok(items)
 }
 
 /// Parse and validate a `characters.ron` (a `Vec<Character>`) against `limits`:
@@ -292,10 +353,27 @@ fn level_from_map(map: &MapFile, limits: &LimitsConfig, what: &str) -> Result<Le
         ));
     }
 
+    if map.items.len() > limits.item_placements_per_level {
+        return Err(format!(
+            "{what} places {} items, exceeds item_placements_per_level {}",
+            map.items.len(),
+            limits.item_placements_per_level
+        ));
+    }
+    for p in &map.items {
+        if level.block_at(GridPos::new(p.x, p.y, p.floor)).is_none() {
+            return Err(format!(
+                "{what} item '{}' at ({},{},floor {}) is out of bounds",
+                p.id, p.x, p.y, p.floor
+            ));
+        }
+    }
+
     Ok(LevelData {
         start,
         start_facing: map.start_facing,
         level,
+        items: map.items.clone(),
     })
 }
 
@@ -324,6 +402,7 @@ fn map_from_level(data: &LevelData) -> MapFile {
         start_floor: data.start.floor,
         start_facing: data.start_facing,
         floors,
+        items: data.items.clone(),
     }
 }
 
@@ -395,6 +474,37 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
     };
     validate_party(&meta.party, &characters, &meta.limits)?;
 
+    // Items (v3). A pre-v3 project (or one omitting the items file) loads with no
+    // items.
+    let items = if meta.items.is_empty() {
+        Vec::new()
+    } else {
+        let path = dir.join(&meta.items);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        items_from_ron(&text, &meta.limits, &meta.items)?
+    };
+
+    // Cross-check placements + starting items reference known item ids.
+    let known = |id: &str| items.iter().any(|d| d.id == id);
+    for (rel, level) in meta.levels.iter().zip(&levels) {
+        for p in &level.items {
+            if !known(&p.id) {
+                return Err(format!("{rel}: placed item '{}' is not defined in {}", p.id, meta.items));
+            }
+        }
+    }
+    for c in &characters {
+        for id in &c.items {
+            if !known(id) {
+                return Err(format!(
+                    "character '{}' starting item '{id}' is not defined in {}",
+                    c.id, meta.items
+                ));
+            }
+        }
+    }
+
     Ok(Project {
         dir,
         name: meta.name,
@@ -403,6 +513,7 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
         levels,
         characters,
         party: meta.party,
+        items,
     })
 }
 
@@ -453,6 +564,7 @@ mod tests {
             start: GridPos::new(0, 0, 1),
             start_facing: Facing::East,
             level: Level { floors: vec![floor0, floor1] },
+            items: Vec::new(),
         }
     }
 
@@ -499,6 +611,7 @@ mod tests {
             dislikes: "毒".into(),
             background: "戦士。\n二行目。".into(),
             growth: GrowthType::Average,
+            items: Vec::new(),
             stats: Stats {
                 level: 3,
                 max_hp: 120,
@@ -567,6 +680,35 @@ mod tests {
     }
 
     #[test]
+    fn level_items_round_trip() {
+        let limits = LimitsConfig::default();
+        let mut lvl = sample_level();
+        lvl.items = vec![
+            ItemPlacement { id: "sword".into(), x: 1, y: 0, floor: 1 },
+            ItemPlacement { id: "bread".into(), x: 2, y: 1, floor: 1 },
+        ];
+        let ron = level_to_ron(&lvl).expect("serialize");
+        let restored = level_from_ron(&ron, &limits, "roundtrip").expect("parse");
+        assert_eq!(lvl.items, restored.items);
+    }
+
+    #[test]
+    fn sample_project_loads() {
+        // Guards every sample RON file (project/characters/items/level) against
+        // schema drift — the same load path the runtime uses.
+        let project = load_project("assets/projects/sample").expect("sample project loads");
+        assert_eq!(project.party.len(), 4);
+        assert!(project.items.iter().any(|d| d.id == "sword_iron"));
+        assert!(!project.levels[0].items.is_empty());
+        // Knight starts armed + armoured.
+        let party = project.build_party();
+        let knight = &party.members[0];
+        assert!(knight.inventory.get(crate::item::SlotRef::Equip(
+            crate::item::EquipSlot::Head
+        )).is_some());
+    }
+
+    #[test]
     fn build_party_gives_full_state() {
         let chars = vec![sample_character("knight")];
         let project = Project {
@@ -577,6 +719,7 @@ mod tests {
             levels: vec![],
             characters: chars,
             party: vec!["knight".into()],
+            items: vec![],
         };
         let party = project.build_party();
         assert_eq!(party.len(), 1);

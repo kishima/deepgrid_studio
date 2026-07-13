@@ -152,4 +152,12 @@
             "########################################",
         ]),
     ],
+    // Item placements (plan5). All on supported floor-1 tiles south/east of the
+    // start (4,4,1); visible when the party turns to face south.
+    items: [
+        (id: "sword_iron", x: 4, y: 5, floor: 1),
+        (id: "chest_wood", x: 5, y: 6, floor: 1),
+        (id: "barrel", x: 7, y: 6, floor: 1),
+        (id: "glow_stone", x: 8, y: 6, floor: 1),
+    ],
 )

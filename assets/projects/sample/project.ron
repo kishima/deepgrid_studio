@@ -5,7 +5,7 @@
 // sizing, door kinds, character count and party size.
 (
     name: "Sample Dungeon",
-    version: 2,
+    version: 3,
     limits: (
         max_levels: 14,
         floors_per_level: 5,
@@ -29,4 +29,7 @@
     // (≤ limits.party_size, ids referencing characters.ron).
     characters: "characters.ron",
     party: ["knight", "mage", "rogue_hooded", "rogue"],
+    // Item definitions (≤ limits.max_item_kinds). Placements live in the level
+    // files; starting inventory is per-character in characters.ron.
+    items: "items.ron",
 )

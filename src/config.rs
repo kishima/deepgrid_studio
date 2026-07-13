@@ -1,6 +1,15 @@
 use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
 
+/// Original-faithful pouch capacity (dandan_spec: 3).
+fn default_pouch_size() -> usize {
+    3
+}
+/// Original-faithful backpack capacity (dandan_spec: 24).
+fn default_backpack_size() -> usize {
+    24
+}
+
 /// Quantity limits for a project (the game being authored). Defaults match the
 /// original "Dandan Dungeon" (project.md「上限値の扱い」), but every value is
 /// mutable — nothing here is a hard-coded structural constraint.
@@ -25,6 +34,12 @@ pub struct LimitsConfig {
     pub max_characters: usize,
     /// Party size.
     pub party_size: usize,
+    /// Pouch slots per character (plan5). Defaulted so pre-plan5 projects load.
+    #[serde(default = "default_pouch_size")]
+    pub pouch_size: usize,
+    /// Backpack slots per character (plan5).
+    #[serde(default = "default_backpack_size")]
+    pub backpack_size: usize,
     /// Item kinds definable.
     pub max_item_kinds: usize,
     /// Item placements per level.
@@ -56,6 +71,8 @@ impl Default for LimitsConfig {
             door_kinds_per_level: 2,
             max_characters: 20,
             party_size: 4,
+            pouch_size: 3,
+            backpack_size: 24,
             max_item_kinds: 199,
             item_placements_per_level: 1023,
             max_monster_kinds: 56,

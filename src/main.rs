@@ -7,10 +7,15 @@
 mod character;
 mod clock;
 mod config;
+mod data_screen;
 mod debug_shot;
 mod dungeon;
 mod editor;
+mod floor_items;
+mod game_state;
+mod hazard;
 mod hud;
+mod item;
 mod player;
 mod portrait;
 mod project;
@@ -23,6 +28,8 @@ use bevy::prelude::*;
 
 use clock::{CycleTick, GameClock};
 use dungeon::DoorStates;
+use floor_items::{InitialItems, PickupRequest};
+use game_state::{DataScreen, SelectedMember};
 use hud::MessageLog;
 use player::{PlayerFell, ScriptedInput};
 use project::Project;
@@ -76,60 +83,92 @@ fn run_play(project: Project) {
     let doors = DoorStates::new(project.limits.door_kinds_per_level);
     let dungeon = project.levels[0].to_dungeon();
     let party = project.build_party();
+    let catalog = project.build_catalog();
+    let initial_items = InitialItems(project.levels[0].items.clone());
 
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "DeepGrid Studio".to_string(),
-                ..default()
-            }),
+    let mut app = App::new();
+    app.add_plugins(DefaultPlugins.set(WindowPlugin {
+        primary_window: Some(Window {
+            title: "DeepGrid Studio".to_string(),
             ..default()
-        }))
-        // Dark clear color: unlit ceiling/void reads as dungeon gloom.
-        .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.03)))
-        .insert_resource(project.limits.clone())
-        .insert_resource(dungeon)
-        .insert_resource(doors)
-        .insert_resource(party)
-        .insert_resource(ScriptedInput::default())
-        .insert_resource(MessageLog::default())
-        .insert_resource(GameClock::default())
-        .add_event::<PlayerFell>()
-        .add_event::<CycleTick>()
-        .add_systems(
-            Startup,
-            (
-                render::setup_dungeon,
-                player::setup_player,
-                props::setup_props,
-                debug_shot::setup_debug_script,
-                hud::greet,
-                // Portraits build the render-target images the HUD cards show, so
-                // the HUD must spawn after them.
-                (portrait::setup_portraits, hud::setup_hud).chain(),
-            ),
+        }),
+        ..default()
+    }))
+    // Dark clear color: unlit ceiling/void reads as dungeon gloom.
+    .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.03)))
+    .insert_resource(project.limits.clone())
+    .insert_resource(dungeon)
+    .insert_resource(doors)
+    .insert_resource(party)
+    .insert_resource(catalog)
+    .insert_resource(initial_items)
+    .insert_resource(ScriptedInput::default())
+    .insert_resource(MessageLog::default())
+    .insert_resource(GameClock::default())
+    .init_resource::<DataScreen>()
+    .init_resource::<SelectedMember>()
+    .add_event::<PlayerFell>()
+    .add_event::<CycleTick>()
+    .add_event::<PickupRequest>();
+    data_screen::init(&mut app);
+
+    app.add_systems(
+        Startup,
+        (
+            render::setup_dungeon,
+            player::setup_player,
+            props::setup_props,
+            floor_items::setup_floor_items,
+            debug_shot::setup_debug_script,
+            hud::greet,
+            // Portraits build the render-target images the HUD cards show, so
+            // the HUD must spawn after them.
+            (portrait::setup_portraits, hud::setup_hud).chain(),
+        ),
+    )
+    .add_systems(
+        Update,
+        (
+            player::player_movement,
+            render::update_door_visibility,
+            props::attach_prop_animations,
+            floor_items::spin_floor_items,
+            debug_shot::debug_screenshot,
+        ),
+    )
+    // Cycle time: tick the clock, then run every on-cycle system this frame.
+    .add_systems(
+        Update,
+        (
+            clock::tick_clock,
+            clock::recover_concentration,
+            character::tick_effects,
+            hazard::hazard_tick,
+            data_screen::rest_tick,
         )
-        .add_systems(
-            Update,
-            (
-                player::player_movement,
-                render::update_door_visibility,
-                props::attach_prop_animations,
-                debug_shot::debug_screenshot,
-            ),
-        )
-        // Cycle time: tick the clock, then run the on-cycle systems this frame.
-        .add_systems(Update, (clock::tick_clock, clock::recover_concentration).chain())
-        // Fall damage must read this frame's `PlayerFell` (written by movement).
-        .add_systems(
-            Update,
-            (
-                character::apply_fall_damage.after(player::player_movement),
-                hud::update_status_bars,
-                hud::update_cards,
-                hud::update_messages,
-                portrait::freeze_portraits,
-            ),
-        )
-        .run();
+            .chain(),
+    )
+    // Pickup/place read this frame's requests (written by movement / the data
+    // screen), so order them after their producers.
+    .add_systems(
+        Update,
+        (
+            character::apply_fall_damage.after(player::player_movement),
+            floor_items::handle_pickup.after(player::player_movement),
+            data_screen::data_screen_interactions,
+            floor_items::handle_place.after(data_screen::data_screen_interactions),
+            data_screen::toggle_data_screen,
+            data_screen::refresh_data_screen.after(data_screen::toggle_data_screen),
+        ),
+    )
+    .add_systems(
+        Update,
+        (
+            hud::update_status_bars,
+            hud::update_cards,
+            hud::update_messages,
+            portrait::freeze_portraits,
+        ),
+    )
+    .run();
 }

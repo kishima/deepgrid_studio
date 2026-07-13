@@ -1,0 +1,43 @@
+// DeepGrid Studio sample — item definitions (plan5). A `Vec<ItemDef>` read
+// through src/project.rs (item.rs::ItemDef). Only non-default fields are written;
+// the rest fall back via #[serde(default)].
+//
+// Units: `weight` is ×100 g and is compared directly against a character's
+// `carrying` stat (also ×100 g) for the load limit. Number ranges follow the
+// original as reference values only and are not enforced.
+[
+    // --- weapons / shields: held in a hand (not an equip slot) ---
+    (id: "sword_iron", name: "つるぎ", kind: General, sharpness: 20, hardness: 12, weight: 3, grip: 10),
+    (id: "shield_wood", name: "きのたて", kind: General, hardness: 15, weight: 2, anti_impact: 8),
+
+    // --- armour: equippable, grants passive stat effects while worn ---
+    (id: "helm_iron", name: "てつかぶと", kind: General, hardness: 14, weight: 2,
+     equip_slots: [Head], effects: [(stat: Defense, delta: 3)]),
+    (id: "armor_leather", name: "かわのよろい", kind: General, hardness: 10, weight: 3,
+     equip_slots: [Body], effects: [(stat: Defense, delta: 5)]),
+    (id: "gauntlet_iron", name: "てつのこて", kind: General, hardness: 12, weight: 2,
+     equip_slots: [Arm], effects: [(stat: Attack, delta: 2)]),
+    (id: "boots_leather", name: "かわのくつ", kind: General, hardness: 8, weight: 2,
+     equip_slots: [Foot], effects: [(stat: Agility, delta: 2)]),
+
+    // --- accessories ---
+    (id: "ring_power", name: "ちからのゆびわ", kind: Accessory, weight: 1,
+     equip_slots: [Neck], effects: [(stat: Attack, delta: 4)]),
+    (id: "amulet_ward", name: "まもりのおまもり", kind: Accessory, weight: 1,
+     equip_slots: [Waist], effects: [(stat: PoisonResist, delta: 40)]),
+
+    // --- food / drink ---
+    (id: "bread", name: "パン", kind: General, hardness: 3, weight: 1, nutrition: 25, temperature: 20),
+    (id: "water_bottle", name: "みずのビン", kind: Liquid, hardness: 0, weight: 1, nutrition: 5, temperature: 10),
+
+    // --- misc ---
+    (id: "key_bronze", name: "あかがねのかぎ", kind: General, weight: 1, important: true),
+    (id: "torch", name: "たいまつ", kind: Light, weight: 2, temperature: 60),
+    (id: "glow_stone", name: "ひかりいし", kind: GlowStone, weight: 1, temperature: 5),
+
+    // --- containers / props (reuse existing KayKit models) ---
+    (id: "chest_wood", name: "たからばこ", kind: TreasureChest, hardness: 20, weight: 15,
+     model: "models/props/chest.glb"),
+    (id: "barrel", name: "たる", kind: EmptyContainer, hardness: 8, weight: 6, capacity: 15,
+     model: "models/props/barrel_small.glb"),
+]

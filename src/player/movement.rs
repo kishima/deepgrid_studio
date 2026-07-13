@@ -34,14 +34,19 @@ pub enum Action {
     TurnRight,
 }
 
-/// A player command: a grid move, a ladder climb, or a door toggle. This is the
-/// single vocabulary shared by keyboard input and the debug scripts.
+/// A player command: a grid move, a ladder climb, a door toggle, an item
+/// pick-up, or a data-screen toggle. This is the single vocabulary shared by
+/// keyboard input and the debug scripts.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Command {
     Move(Action),
     ClimbUp,
     ClimbDown,
     ToggleDoor,
+    /// Pick up the item under/ahead of the party (plan5).
+    Get,
+    /// Toggle the data screen (plan5).
+    ToggleData,
 }
 
 /// Emitted once when a fall finishes, carrying how many floors were dropped
@@ -380,6 +385,8 @@ fn start_command(cmd: Command, player: &mut Player, anim: &mut MoveAnim, dungeon
         Command::ClimbUp => start_climb(true, player, anim, dungeon, doors),
         Command::ClimbDown => start_climb(false, player, anim, dungeon, doors),
         Command::ToggleDoor => toggle_front_door(player, dungeon, doors),
+        // Handled instantly in `player_movement` before reaching here.
+        Command::Get | Command::ToggleData => {}
     }
 }
 
@@ -396,8 +403,16 @@ pub fn player_movement(
     mut anim: ResMut<MoveAnim>,
     mut script: ResMut<ScriptedInput>,
     mut fell: EventWriter<PlayerFell>,
+    party: Res<crate::character::Party>,
+    catalog: Res<crate::item::ItemCatalog>,
+    mut log: ResMut<crate::hud::MessageLog>,
+    mut pickup: EventWriter<crate::floor_items::PickupRequest>,
+    mut data: ResMut<crate::game_state::DataScreen>,
+    mut overweight_warned: Local<bool>,
     mut cameras: Query<&mut Transform, With<PlayerCamera>>,
 ) {
+    use crate::floor_items::PickupRequest;
+
     let Ok(mut transform) = cameras.get_single_mut() else {
         return;
     };
@@ -428,31 +443,74 @@ pub fn player_movement(
         }
     }
 
-    // 2. Door toggling from the keyboard is edge-triggered and allowed anytime
-    //    (it's instant; scripts drive it via the command queue instead).
-    if !script.active && keys.just_pressed(KeyCode::Space) {
-        toggle_front_door(&player, &dungeon, &mut doors);
+    // 2. Instant, edge-triggered keyboard actions (ignored while a script drives
+    //    input). Tab/I toggle the data screen anytime; the rest are suppressed
+    //    while it's open.
+    if !script.active {
+        if keys.just_pressed(KeyCode::Tab) || keys.just_pressed(KeyCode::KeyI) {
+            data.open = !data.open;
+        }
+        if !data.open {
+            if keys.just_pressed(KeyCode::Space) {
+                toggle_front_door(&player, &dungeon, &mut doors);
+            }
+            if keys.just_pressed(KeyCode::KeyG) {
+                pickup.send(PickupRequest);
+            }
+        }
     }
 
     // 3. Dispatch the next command.
     if anim.is_animating() {
         // Buffer only keys newly pressed *during* the animation (buffering the
         // held state would turn a short tap into two steps). Never buffer while
-        // falling.
-        let can_buffer = !script.active && !anim.input_locked;
+        // falling or with the data screen up.
+        let can_buffer = !script.active && !anim.input_locked && !data.open;
         if let Some(cmd) = desired_command(|k| keys.just_pressed(k)).filter(|_| can_buffer) {
             anim.buffered = Some(cmd);
         }
     } else {
         let next = if script.active {
             script.queue.pop_front()
+        } else if data.open {
+            None
         } else {
             anim.buffered
                 .take()
                 .or_else(|| desired_command(|k| keys.pressed(k)))
         };
         if let Some(cmd) = next {
-            start_command(cmd, &mut player, &mut anim, &dungeon, &mut doors);
+            match cmd {
+                // Inventory / screen commands are instant and world-independent.
+                Command::Get => {
+                    if !data.open {
+                        pickup.send(PickupRequest);
+                    }
+                }
+                Command::ToggleData => data.open = !data.open,
+                // World commands are ignored while the data screen is open.
+                _ if data.open => {}
+                // A translation is refused when any member is overloaded; turns
+                // are always allowed so the party can still look around.
+                Command::Move(action) if move_facing(action, player.facing).is_some() => {
+                    if let Some(idx) = party.overweight_member(&catalog) {
+                        if !*overweight_warned {
+                            log.push(format!(
+                                "{}は動けない! 荷物が重すぎる",
+                                party.members[idx].character.first_name
+                            ));
+                            *overweight_warned = true;
+                        }
+                    } else {
+                        *overweight_warned = false;
+                        start_command(cmd, &mut player, &mut anim, &dungeon, &mut doors);
+                    }
+                }
+                _ => {
+                    *overweight_warned = false;
+                    start_command(cmd, &mut player, &mut anim, &dungeon, &mut doors);
+                }
+            }
         }
     }
 }

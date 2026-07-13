@@ -23,8 +23,6 @@ pub struct PropAnimation {
 /// our blocks are 1.0 — scale everything down to read well inside a cell.
 /// Values tuned by eye against the `props` debug shot.
 const SKELETON_SCALE: f32 = 0.45;
-const CHEST_SCALE: f32 = 0.3;
-const BARREL_SCALE: f32 = 0.35;
 
 /// Animation indices in the KayKit skeleton glbs (identical rig/animation list
 /// in every character of the pack — 95 clips).
@@ -96,21 +94,9 @@ pub fn setup_props(
             .with_scale(Vec3::splat(SKELETON_SCALE)),
     ));
 
-    // Treasure chest one tile south of the start, lid toward the player.
-    commands.spawn((
-        SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/props/chest.glb"))),
-        Transform::from_translation(on_floor(4, 5, 1))
-            .with_rotation(Quat::from_rotation_y(std::f32::consts::PI))
-            .with_scale(Vec3::splat(CHEST_SCALE)),
-    ));
-
-    // Barrel in the corridor beside the skeleton minion.
-    commands.spawn((
-        SceneRoot(
-            asset_server.load(GltfAssetLabel::Scene(0).from_asset("models/props/barrel_small.glb")),
-        ),
-        Transform::from_translation(on_floor(5, 6, 1)).with_scale(Vec3::splat(BARREL_SCALE)),
-    ));
+    // The chest and barrel that used to live here are now data-driven item
+    // placements (plan5, floor_items.rs); the skeletons stay hardcoded until
+    // monster placement arrives in plan6.
 }
 
 /// When a glTF scene finishes spawning, its `AnimationPlayer` appears on a

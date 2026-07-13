@@ -38,6 +38,9 @@
             bite: 6,
         ),
         model: "models/party/knight.glb",
+        // Starts armed and armoured: sword + shield fill both hands, helmet and
+        // leather armour auto-equip to Head / Body (grant Defense while worn).
+        items: ["sword_iron", "shield_wood", "helm_iron", "armor_leather"],
     ),
     (
         id: "mage",
@@ -71,6 +74,7 @@
             bite: 2,
         ),
         model: "models/party/mage.glb",
+        items: ["ring_power", "bread"],
     ),
     (
         id: "rogue_hooded",

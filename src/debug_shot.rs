@@ -22,8 +22,26 @@ fn scene_script(value: &str) -> VecDeque<Command> {
         "ladder" => vec![Move(TurnRight), Move(Forward), Move(Forward), Move(Forward), ClimbUp],
         // Turn to face the door and open it (kind 0).
         "door" => vec![Move(TurnRight), Move(TurnRight), ToggleDoor],
-        // Turn South toward the showcase props (chest, skeleton, barrel).
+        // Turn South toward the showcase props (skeleton).
         "props" => vec![Move(TurnRight)],
+        // Turn South to face the floor items (sword, chest, barrel, glow stone).
+        "items" => vec![Move(TurnRight)],
+        // Step onto the sword tile to the south and pick it up.
+        "pickup" => vec![Move(TurnRight), Move(Forward), Get],
+        // Pick the sword up, then open the data screen over it.
+        "data" => vec![Move(TurnRight), Move(Forward), Get, ToggleData],
+        // Walk the corridor to the water tile and stand in it (takes cycle damage).
+        "liquid" => vec![
+            Move(TurnRight),
+            Move(Forward),
+            Move(Forward),
+            Move(TurnLeft),
+            Move(Forward),
+            Move(Forward),
+            Move(Forward),
+            Move(TurnRight),
+            Move(Forward),
+        ],
         // Unknown value: fall back to the start scene.
         _ => vec![],
     };
