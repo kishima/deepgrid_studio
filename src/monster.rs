@@ -291,7 +291,7 @@ pub fn setup_monsters(
         };
         let pos = GridPos::new(p.x, p.y, p.floor);
         let transform = Transform::from_translation(tile_center(pos))
-            .with_rotation(Quat::from_rotation_y(p.facing.yaw()))
+            .with_rotation(Quat::from_rotation_y(model_yaw(p.facing)))
             .with_scale(Vec3::splat(MONSTER_SCALE));
         commands.spawn((
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(def.model.clone()))),
@@ -435,6 +435,17 @@ pub fn drive_monster_anim(
     }
 }
 
+/// Visual yaw for a monster model looking along `facing`.
+///
+/// `Facing::yaw()` is the *camera* convention (forward = -Z, so North = 0), but
+/// KayKit models are authored facing **+Z**; applying the camera yaw directly
+/// turns the mesh 180° away from its walk direction (the "crab/moon-walk" the
+/// user reported 2026-07-14). Offsetting by π points the visual front along the
+/// facing for all four directions.
+fn model_yaw(facing: Facing) -> f32 {
+    facing.yaw() + std::f32::consts::PI
+}
+
 /// Smoothly slide each monster's transform toward its logical tile + facing.
 pub fn interpolate_monsters(time: Res<Time>, mut monsters: Query<(&Monster, &mut Transform)>) {
     for (m, mut tf) in &mut monsters {
@@ -446,7 +457,7 @@ pub fn interpolate_monsters(time: Res<Time>, mut monsters: Query<(&Monster, &mut
         } else {
             tf.translation += delta.normalize() * step;
         }
-        let target_yaw = Quat::from_rotation_y(m.facing.yaw());
+        let target_yaw = Quat::from_rotation_y(model_yaw(m.facing));
         tf.rotation = tf.rotation.slerp(target_yaw, (step * 4.0).min(1.0));
         tf.scale = Vec3::splat(MONSTER_SCALE);
     }
@@ -488,6 +499,20 @@ pub fn update_occupancy(
 
 fn chebyshev(a: GridPos, b: GridPos) -> i32 {
     (a.x - b.x).abs().max((a.y - b.y).abs())
+}
+
+/// The cardinal facing that points from `from` most directly toward `to`
+/// (ties prefer the horizontal axis).
+fn facing_toward(from: GridPos, to: GridPos) -> Facing {
+    let dx = to.x - from.x;
+    let dy = to.y - from.y;
+    if dx.abs() >= dy.abs() {
+        if dx >= 0 { Facing::East } else { Facing::West }
+    } else if dy >= 0 {
+        Facing::South
+    } else {
+        Facing::North
+    }
 }
 
 /// Straight-line visibility on one floor (Bresenham; blocked by walls / shut
@@ -709,13 +734,11 @@ pub fn monster_ai(
         } else if m.anim_hold <= 0.0 && !m.dead {
             m.anim = AnimKind::Idle;
         }
-        // Always face the player when adjacent (so attacks look right).
-        if sees && chebyshev(m.pos, player.pos) == 1 {
-            let dx = player.pos.x - m.pos.x;
-            let dy = player.pos.y - m.pos.y;
-            m.facing = if dx.abs() >= dy.abs() {
-                if dx >= 0 { Facing::East } else { Facing::West }
-            } else if dy >= 0 { Facing::South } else { Facing::North };
+        // Always face the player when adjacent, sight or no sight — being in
+        // melee range is impossible to miss, and attacks/counterattacks should
+        // visually point at their target (user feedback 2026-07-14).
+        if chebyshev(m.pos, player.pos) == 1 && m.pos.floor == player.pos.floor {
+            m.facing = facing_toward(m.pos, player.pos);
         }
     }
 }
@@ -843,6 +866,8 @@ pub fn player_actions(
                 mon.hp -= dmg;
                 mon.anim = AnimKind::Hit;
                 mon.anim_hold = 0.4;
+                // Whirl to face whoever just hit it.
+                mon.facing = facing_toward(mon.pos, player.pos);
                 log.push(format!("{a_name}の こうげき! {}に {dmg}のダメージ", mdef.name));
                 if mon.hp <= 0 {
                     kill_monster(
@@ -986,6 +1011,8 @@ fn throw_item(
             mon.hp -= dmg;
             mon.anim = AnimKind::Hit;
             mon.anim_hold = 0.4;
+            // Face the thrower.
+            mon.facing = facing_toward(mon.pos, player.pos);
             if let Some(mdef) = mdef {
                 log.push(format!("{}に {dmg}のダメージ", mdef.name));
                 if mon.hp <= 0 {
