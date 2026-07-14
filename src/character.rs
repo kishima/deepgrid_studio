@@ -196,6 +196,12 @@ pub struct Character {
     pub stats: Stats,
     /// Portrait source: a project-relative or `assets/`-relative `.glb` path.
     pub model: String,
+    /// Optional static portrait image (`assets/`-relative path). When set, the
+    /// HUD shows this image instead of the live 3D bust rendered from `model`
+    /// (user feedback 2026-07-14: the KayKit busts were too cute — engravings
+    /// give the party a darker look).
+    #[serde(default)]
+    pub portrait: String,
     /// Starting item ids (plan5). Equippable ones are auto-equipped at party
     /// build; the rest go to hands/pouch/backpack. `#[serde(default)]` so
     /// pre-plan5 `characters.ron` still parses.
@@ -496,6 +502,7 @@ mod tests {
             growth,
             stats: Stats { level, max_hp: 100, attack: 10, ..stats(5) },
             model: "".into(),
+            portrait: "".into(),
             items: vec![],
         };
         let state = CharacterState::full(&ch);
@@ -573,6 +580,7 @@ mod tests {
                 ..stats(1)
             },
             model: "models/party/knight.glb".into(),
+            portrait: "".into(),
             items: Vec::new(),
         };
         let st = CharacterState::full(&ch);

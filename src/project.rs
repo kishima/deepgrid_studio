@@ -735,6 +735,7 @@ mod tests {
                 bite: 2,
             },
             model: "models/party/knight.glb".into(),
+            portrait: "projects/sample/portraits/knight.png".into(),
         }
     }
 

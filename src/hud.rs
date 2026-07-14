@@ -29,6 +29,15 @@ const VISIBLE_LINES: usize = 4;
 const SIDEBAR_W: f32 = 220.0;
 /// Message window height in px.
 const MESSAGE_H: f32 = 96.0;
+
+// Icon-window buttons, sized for the mouse (user feedback 2026-07-14; the
+// original's pad has chunky ~40px cells). Shared by the action and move pads.
+const ICON_BTN_H: f32 = 44.0;
+const ACTION_BTN_W: f32 = 76.0;
+const PAD_BTN_W: f32 = 52.0;
+const PAD_BAR_H: f32 = 32.0;
+const ICON_GAP: f32 = 6.0;
+const ICON_FONT: f32 = 19.0;
 /// Bar track width in px.
 const BAR_W: f32 = 120.0;
 
@@ -224,52 +233,88 @@ pub fn setup_hud(
         });
 
     // Action-icon window: bottom-right, above the message window (plan6). Same
-    // functions as the Space/B/C/T/V keys.
+    // functions as the G/Space/B/C/T/V keys. Sized for the mouse (user feedback
+    // 2026-07-14, after the original's chunky icon grid): a 3×2 grid of large
+    // buttons instead of a strip of small ones.
     use crate::monster::PlayerAction;
+    let actions: [[(Option<PlayerAction>, &str); 3]; 2] = [
+        [
+            (Some(PlayerAction::Attack), "攻撃"),
+            (Some(PlayerAction::Guard), "防ぐ"),
+            (Some(PlayerAction::Concentrate), "精神"),
+        ],
+        [
+            (Some(PlayerAction::Throw), "投げる"),
+            (Some(PlayerAction::Steal), "盗む"),
+            (None, "取る"), // Command::Get — spawned as a MoveIcon below
+        ],
+    ];
     commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
                 right: Val::Px(8.0),
                 bottom: Val::Px(MESSAGE_H + 14.0),
-                flex_direction: FlexDirection::Row,
-                column_gap: Val::Px(4.0),
-                padding: UiRect::all(Val::Px(4.0)),
+                flex_direction: FlexDirection::Column,
+                row_gap: Val::Px(ICON_GAP),
+                padding: UiRect::all(Val::Px(6.0)),
                 ..default()
             },
             BackgroundColor(PANEL_BG),
         ))
-        .with_children(|row| {
-            for (act, label) in [
-                (PlayerAction::Attack, "攻撃"),
-                (PlayerAction::Guard, "防ぐ"),
-                (PlayerAction::Concentrate, "精神"),
-                (PlayerAction::Throw, "投げる"),
-                (PlayerAction::Steal, "盗む"),
-            ] {
-                row.spawn((
-                    Button,
-                    Node { padding: UiRect::axes(Val::Px(7.0), Val::Px(4.0)), ..default() },
-                    BackgroundColor(Color::srgb(0.22, 0.24, 0.30)),
-                    ActionIcon(act),
-                ))
-                .with_children(|b| {
-                    b.spawn((
-                        Text::new(label),
-                        TextFont { font: bold.clone(), font_size: 13.0, ..default() },
-                        TextColor(Color::WHITE),
-                    ));
+        .with_children(|col| {
+            for row_def in actions {
+                col.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(ICON_GAP),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for (act, label) in row_def {
+                        let mut btn = row.spawn((
+                            Button,
+                            Node {
+                                width: Val::Px(ACTION_BTN_W),
+                                height: Val::Px(ICON_BTN_H),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.22, 0.24, 0.30)),
+                        ));
+                        match act {
+                            Some(a) => btn.insert(ActionIcon(a)),
+                            None => btn.insert(MoveIcon(crate::player::Command::Get)),
+                        };
+                        btn.with_children(|b| {
+                            b.spawn((
+                                Text::new(label),
+                                TextFont { font: bold.clone(), font_size: ICON_FONT, ..default() },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    }
                 });
             }
         });
 
-    // Move-icon window: bottom-left, above the message window (auxiliary input).
+    // Move-icon window: bottom-left, above the message window (auxiliary
+    // input). Laid out after the original's movement pad (user feedback
+    // 2026-07-14): a wide UP bar, two rows of large arrows, a wide DOWN bar.
     use crate::player::{Action, Command};
-    let grid: [[(Command, &str); 3]; 3] = [
-        [(Command::Move(Action::TurnLeft), "左"), (Command::Move(Action::Forward), "↑"), (Command::Move(Action::TurnRight), "右")],
-        [(Command::Move(Action::StrafeLeft), "←"), (Command::Move(Action::Backward), "↓"), (Command::Move(Action::StrafeRight), "→")],
-        [(Command::ClimbUp, "上"), (Command::ClimbDown, "下"), (Command::Get, "取")],
+    let pad_rows: [[(Command, &str); 3]; 2] = [
+        [
+            (Command::Move(Action::TurnLeft), "左"),
+            (Command::Move(Action::Forward), "↑"),
+            (Command::Move(Action::TurnRight), "右"),
+        ],
+        [
+            (Command::Move(Action::StrafeLeft), "←"),
+            (Command::Move(Action::Backward), "↓"),
+            (Command::Move(Action::StrafeRight), "→"),
+        ],
     ];
+    let bar_w = PAD_BTN_W * 3.0 + ICON_GAP * 2.0;
     commands
         .spawn((
             Node {
@@ -277,39 +322,66 @@ pub fn setup_hud(
                 left: Val::Px(8.0),
                 bottom: Val::Px(MESSAGE_H + 14.0),
                 flex_direction: FlexDirection::Column,
-                row_gap: Val::Px(3.0),
-                padding: UiRect::all(Val::Px(4.0)),
+                row_gap: Val::Px(ICON_GAP),
+                padding: UiRect::all(Val::Px(6.0)),
                 ..default()
             },
             BackgroundColor(PANEL_BG),
         ))
         .with_children(|col| {
-            for r in grid {
-                col.spawn(Node { flex_direction: FlexDirection::Row, column_gap: Val::Px(3.0), ..default() })
-                    .with_children(|row| {
-                        for (cmd, label) in r {
-                            row.spawn((
-                                Button,
-                                Node {
-                                    width: Val::Px(30.0),
-                                    height: Val::Px(26.0),
-                                    justify_content: JustifyContent::Center,
-                                    align_items: AlignItems::Center,
-                                    ..default()
-                                },
-                                BackgroundColor(Color::srgb(0.20, 0.22, 0.28)),
-                                MoveIcon(cmd),
-                            ))
-                            .with_children(|b| {
-                                b.spawn((
-                                    Text::new(label),
-                                    TextFont { font: bold.clone(), font_size: 14.0, ..default() },
-                                    TextColor(Color::WHITE),
-                                ));
-                            });
-                        }
-                    });
+            let wide_bar = |col: &mut ChildBuilder, cmd: Command, label: &str| {
+                col.spawn((
+                    Button,
+                    Node {
+                        width: Val::Px(bar_w),
+                        height: Val::Px(PAD_BAR_H),
+                        justify_content: JustifyContent::Center,
+                        align_items: AlignItems::Center,
+                        ..default()
+                    },
+                    BackgroundColor(Color::srgb(0.24, 0.22, 0.18)),
+                    MoveIcon(cmd),
+                ))
+                .with_children(|b| {
+                    b.spawn((
+                        Text::new(label),
+                        TextFont { font: bold.clone(), font_size: ICON_FONT, ..default() },
+                        TextColor(Color::srgb(1.0, 0.9, 0.6)),
+                    ));
+                });
+            };
+            wide_bar(col, Command::ClimbUp, "UP");
+            for r in pad_rows {
+                col.spawn(Node {
+                    flex_direction: FlexDirection::Row,
+                    column_gap: Val::Px(ICON_GAP),
+                    ..default()
+                })
+                .with_children(|row| {
+                    for (cmd, label) in r {
+                        row.spawn((
+                            Button,
+                            Node {
+                                width: Val::Px(PAD_BTN_W),
+                                height: Val::Px(ICON_BTN_H),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgb(0.20, 0.22, 0.28)),
+                            MoveIcon(cmd),
+                        ))
+                        .with_children(|b| {
+                            b.spawn((
+                                Text::new(label),
+                                TextFont { font: bold.clone(), font_size: ICON_FONT, ..default() },
+                                TextColor(Color::WHITE),
+                            ));
+                        });
+                    }
+                });
             }
+            wide_bar(col, Command::ClimbDown, "DOWN");
         });
 }
 

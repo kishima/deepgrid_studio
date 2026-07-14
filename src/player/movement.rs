@@ -214,17 +214,20 @@ pub fn setup_player(mut commands: Commands, dungeon: Res<Dungeon>) {
 /// `pressed` or `just_pressed`). Door toggling is handled separately (edge-only)
 /// so holding the key can't flap the door.
 fn desired_command(mut is_active: impl FnMut(KeyCode) -> bool) -> Option<Command> {
-    if is_active(KeyCode::KeyW) {
+    // Arrow keys mirror WASD/QE with a classic-crawler layout (user feedback
+    // 2026-07-14): ↑/↓ = forward/backward, ←/→ = turn in place (strafing stays
+    // on A/D only).
+    if is_active(KeyCode::KeyW) || is_active(KeyCode::ArrowUp) {
         Some(Command::Move(Action::Forward))
-    } else if is_active(KeyCode::KeyS) {
+    } else if is_active(KeyCode::KeyS) || is_active(KeyCode::ArrowDown) {
         Some(Command::Move(Action::Backward))
     } else if is_active(KeyCode::KeyA) {
         Some(Command::Move(Action::StrafeLeft))
     } else if is_active(KeyCode::KeyD) {
         Some(Command::Move(Action::StrafeRight))
-    } else if is_active(KeyCode::KeyQ) {
+    } else if is_active(KeyCode::KeyQ) || is_active(KeyCode::ArrowLeft) {
         Some(Command::Move(Action::TurnLeft))
-    } else if is_active(KeyCode::KeyE) {
+    } else if is_active(KeyCode::KeyE) || is_active(KeyCode::ArrowRight) {
         Some(Command::Move(Action::TurnRight))
     } else if is_active(KeyCode::KeyR) {
         Some(Command::ClimbUp)

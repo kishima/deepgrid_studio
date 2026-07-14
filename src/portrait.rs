@@ -148,6 +148,12 @@ pub fn setup_portraits(
     let mut handles = Vec::with_capacity(party.len());
 
     for (i, member) in party.members.iter().enumerate() {
+        // A static portrait image (characters.ron `portrait`) replaces the whole
+        // render-to-texture rig for this member.
+        if !member.character.portrait.is_empty() {
+            handles.push(asset_server.load(member.character.portrait.clone()));
+            continue;
+        }
         let target = make_target(&mut images);
         handles.push(target.clone());
 
