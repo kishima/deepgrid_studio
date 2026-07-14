@@ -212,6 +212,62 @@ pub struct FrontInteract {
     pub pos: GridPos,
 }
 
+/// Runtime overrides for writable-wall text (plan9). Keyed by `(level, x, y,
+/// floor)`; these take precedence over the authored `wall_texts` and are the save
+/// target in plan10 (project data is never rewritten by the pencil).
+#[derive(Resource, Default)]
+pub struct WallWrites {
+    pub map: std::collections::HashMap<(usize, i32, i32, usize), String>,
+}
+
+/// A request to write `text` on the writable wall the party faces (plan9). Sent
+/// by the in-game write box and by the autotest — the shared core path.
+#[derive(Event, Clone)]
+pub struct WallWriteRequest {
+    pub text: String,
+}
+
+/// Apply wall-write requests: the party must face a `WritableWall` and hold a
+/// pencil. Writes the override for the current level and logs the result.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_wall_write(
+    mut reader: EventReader<WallWriteRequest>,
+    party: Res<Party>,
+    player: Res<Player>,
+    dungeon: Res<Dungeon>,
+    item_catalog: Res<ItemCatalog>,
+    current: Res<CurrentLevel>,
+    mut writes: ResMut<WallWrites>,
+    mut log: ResMut<MessageLog>,
+) {
+    for req in reader.read() {
+        let (dx, dy) = player.facing.delta();
+        let front = GridPos::new(player.pos.x + dx, player.pos.y + dy, player.pos.floor);
+        if !matches!(dungeon.level.block_at(front), Some(Block::WritableWall)) {
+            log.push("正面に 書ける壁がない");
+            continue;
+        }
+        let has_pencil = party.members.iter().any(|m| {
+            m.inventory.iter().any(|(_, it)| {
+                matches!(
+                    item_catalog.get(&it.def_id).map(|d| d.kind),
+                    Some(crate::item::ItemKind::Pencil)
+                        | Some(crate::item::ItemKind::RedPencil)
+                        | Some(crate::item::ItemKind::BluePencil)
+                )
+            })
+        });
+        if !has_pencil {
+            log.push("鉛筆を 持っていない");
+            continue;
+        }
+        writes
+            .map
+            .insert((current.0, front.x, front.y, front.floor), req.text.clone());
+        log.push("壁に かきこんだ。");
+    }
+}
+
 /// Push an event onto the delayed queue if its flag condition holds. Returns
 /// whether it was enqueued.
 fn enqueue(queue: &mut EventQueue, ev: &EventDef, level: usize, now: u64, flags: &EventFlags) -> bool {
@@ -242,17 +298,22 @@ pub fn front_interact(
     mut triggers: ResMut<TriggerStates>,
     mut queue: ResMut<EventQueue>,
     clock: Res<GameClock>,
+    writes: Res<WallWrites>,
     mut log: ResMut<MessageLog>,
 ) {
     let level = current.0;
     let Some(ld) = game_levels.levels.get(level) else { return };
     for fi in reader.read() {
         let (px, py, pf) = (fi.pos.x, fi.pos.y, fi.pos.floor);
-        // Writable wall: show its text.
+        // Writable wall: a runtime write (plan9) shadows the authored text.
         if matches!(ld.level.block_at(fi.pos), Some(Block::WritableWall)) {
-            match ld.wall_text_at(px, py, pf) {
-                Some(t) => log.push(t.to_string()),
-                None => log.push("壁に 何か 書かれているが 読めない"),
+            if let Some(t) = writes.map.get(&(level, px, py, pf)) {
+                log.push(t.clone());
+            } else {
+                match ld.wall_text_at(px, py, pf) {
+                    Some(t) => log.push(t.to_string()),
+                    None => log.push("壁に 何か 書かれているが 読めない"),
+                }
             }
         }
         for ev in ld.events.iter().filter(|e| e.at == (px, py, pf)) {

@@ -13,8 +13,12 @@ use bevy::render::render_asset::RenderAssetUsages;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat, TextureUsages};
 use bevy_egui::{EguiContext, EguiRenderToImage};
 
-use super::EditorState;
 use super::ui::build_editor_ui;
+use super::{EditorState, Tab};
+
+/// The tab to open for the editor shot (set by `setup`).
+#[derive(Resource)]
+struct ShotTab(Tab);
 
 /// Off-screen render size. Width is a multiple of 64 so the GPU readback has no
 /// per-row padding (bytes-per-row is already 256-aligned) and the bytes map
@@ -29,10 +33,17 @@ pub struct EditorShot {
     saved: bool,
 }
 
-/// Register the render-to-image editor UI and the capture driver.
-pub fn setup(app: &mut App) {
-    app.add_systems(Startup, spawn_render_target)
+/// Register the render-to-image editor UI (opened on `tab`) and the capture driver.
+pub fn setup(app: &mut App, tab: Tab) {
+    app.insert_resource(ShotTab(tab))
+        .add_systems(Startup, (spawn_render_target, open_tab))
         .add_systems(Update, (editor_ui_image, capture_driver));
+}
+
+/// Open the requested tab before the first frame is captured.
+fn open_tab(shot_tab: Res<ShotTab>, mut state: ResMut<EditorState>) {
+    state.tab = shot_tab.0;
+    state.recompute_warnings();
 }
 
 fn spawn_render_target(mut commands: Commands, mut images: ResMut<Assets<Image>>) {

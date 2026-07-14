@@ -43,6 +43,7 @@
     // --- misc ---
     (id: "key_bronze", name: "あかがねのかぎ", kind: General, weight: 1, important: true),
     (id: "torch", name: "たいまつ", kind: Light, weight: 2, temperature: 60),
+    (id: "pencil", name: "えんぴつ", kind: Pencil, weight: 1),
     (id: "glow_stone", name: "ひかりいし", kind: GlowStone, weight: 1, temperature: 5),
 
     // --- containers / props (reuse existing KayKit models) ---

@@ -8,7 +8,7 @@
 //! ```
 //!
 //! This module is the single read/write path for both the runtime (`main.rs`)
-//! and the editor: `load_project` / `save_level`. Writing a level and reading it
+//! and the editor: `load_project` / `save_project`. Writing a level and reading it
 //! back must reproduce the same data (round-trip; see the tests) — comments are
 //! not preserved.
 
@@ -59,6 +59,10 @@ struct ProjectMeta {
     /// projects (no `rules` block) load with everything at its default.
     #[serde(default)]
     rules: RulesConfig,
+    /// Event flags that start ON (plan9 editor「イベントフラグ設定」). `#[serde(default)]`
+    /// so older projects load with every flag off.
+    #[serde(default)]
+    initial_flags: Vec<usize>,
 }
 
 /// One floor of the on-disk map: `height` rows of `width` characters.
@@ -182,7 +186,9 @@ impl LevelData {
 pub const PROJECT_VERSION: u32 = 6;
 
 /// A loaded project: metadata, limits, levels, registered characters + party
-/// roster (v2+), and item definitions (v3+).
+/// roster (v2+), and item definitions (v3+). `Clone` so the editor (plan9) can
+/// snapshot it for undo and clone it before Save All.
+#[derive(Clone)]
 pub struct Project {
     pub dir: PathBuf,
     pub name: String,
@@ -201,6 +207,15 @@ pub struct Project {
     pub magics: Vec<MagicDef>,
     /// Per-project game rules (defaults for a pre-plan6.5 project).
     pub rules: RulesConfig,
+    /// Event flags that start ON (plan9).
+    pub initial_flags: Vec<usize>,
+    /// Relative file names loaded from `project.ron`, kept so Save All (plan9)
+    /// writes the same paths. Empty ⇒ the conventional default name is used when
+    /// the matching data is non-empty.
+    pub characters_path: String,
+    pub items_path: String,
+    pub monsters_path: String,
+    pub magics_path: String,
 }
 
 impl Project {
@@ -790,26 +805,113 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
         monsters,
         magics,
         rules: meta.rules,
+        initial_flags: meta.initial_flags,
+        characters_path: meta.characters,
+        items_path: meta.items,
+        monsters_path: meta.monsters,
+        magics_path: meta.magics,
     })
 }
 
-/// Write one level back to disk, backing up the previous file to `*.ron.bak`
-/// (one generation). Does not panic on I/O failure — returns the error for the
-/// editor's status bar.
-pub fn save_level(dir: impl AsRef<Path>, rel_path: &str, data: &LevelData) -> Result<(), String> {
-    let path = dir.as_ref().join(rel_path);
-    let ron = level_to_ron(data)?;
-    if path.exists() {
-        let bak = path.with_extension("ron.bak");
-        std::fs::copy(&path, &bak)
-            .map_err(|e| format!("failed to back up {}: {e}", path.display()))?;
+/// Write the whole project back to disk (plan9 "Save All"): `project.ron` plus
+/// the characters / items / monsters / magics files and every level, each with a
+/// one-generation `.bak`. Round-trips (reloading reproduces the same data — see
+/// the test). Errors are collected, not fatal, so a partial write still reports
+/// everything that failed.
+pub fn save_project(project: &Project) -> Result<(), Vec<String>> {
+    let mut errors = Vec::new();
+
+    // Resolve the data file names (keep what was loaded; fall back to a default
+    // when data exists but no name was recorded, e.g. a fresh project).
+    let name_or = |path: &str, default: &str, has_data: bool| -> String {
+        if !path.is_empty() {
+            path.to_string()
+        } else if has_data {
+            default.to_string()
+        } else {
+            String::new()
+        }
+    };
+    let characters_file = name_or(&project.characters_path, "characters.ron", !project.characters.is_empty());
+    let items_file = name_or(&project.items_path, "items.ron", !project.items.is_empty());
+    let monsters_file = name_or(&project.monsters_path, "monsters.ron", !project.monsters.is_empty());
+    let magics_file = name_or(&project.magics_path, "magics.ron", !project.magics.is_empty());
+
+    let write_ron = |errors: &mut Vec<String>, rel: &str, contents: Result<String, String>| {
+        if rel.is_empty() {
+            return;
+        }
+        match contents {
+            Ok(text) => {
+                if let Err(e) = write_with_backup(&project.dir, rel, &text) {
+                    errors.push(e);
+                }
+            }
+            Err(e) => errors.push(e),
+        }
+    };
+
+    let pretty = ron::ser::PrettyConfig::default;
+
+    // Data files.
+    write_ron(&mut errors, &characters_file, ron::ser::to_string_pretty(&project.characters, pretty()).map_err(|e| format!("characters: {e}")));
+    write_ron(&mut errors, &items_file, ron::ser::to_string_pretty(&project.items, pretty()).map_err(|e| format!("items: {e}")));
+    write_ron(&mut errors, &monsters_file, ron::ser::to_string_pretty(&project.monsters, pretty()).map_err(|e| format!("monsters: {e}")));
+    write_ron(&mut errors, &magics_file, ron::ser::to_string_pretty(&project.magics, pretty()).map_err(|e| format!("magics: {e}")));
+
+    // Levels.
+    for (rel, level) in project.level_paths.iter().zip(&project.levels) {
+        match level_to_ron(level) {
+            Ok(text) => {
+                if let Err(e) = write_with_backup(&project.dir, rel, &text) {
+                    errors.push(e);
+                }
+            }
+            Err(e) => errors.push(e),
+        }
     }
+
+    // project.ron (written last so it always points at fresh data files).
+    let meta = ProjectMeta {
+        name: project.name.clone(),
+        version: PROJECT_VERSION,
+        limits: project.limits.clone(),
+        levels: project.level_paths.clone(),
+        characters: characters_file,
+        party: project.party.clone(),
+        items: items_file,
+        monsters: monsters_file,
+        magics: magics_file,
+        rules: project.rules.clone(),
+        initial_flags: project.initial_flags.clone(),
+    };
+    match ron::ser::to_string_pretty(&meta, pretty()) {
+        Ok(text) => {
+            if let Err(e) = write_with_backup(&project.dir, "project.ron", &text) {
+                errors.push(e);
+            }
+        }
+        Err(e) => errors.push(format!("failed to serialize project.ron: {e}")),
+    }
+
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
+}
+
+/// Write `rel` under `dir`, backing up any existing file to `*.bak` (one
+/// generation) and creating parent directories.
+fn write_with_backup(dir: &Path, rel: &str, contents: &str) -> Result<(), String> {
+    let path = dir.join(rel);
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| format!("failed to create {}: {e}", parent.display()))?;
     }
-    std::fs::write(&path, ron).map_err(|e| format!("failed to write {}: {e}", path.display()))?;
-    Ok(())
+    if path.exists() {
+        let bak = path.with_extension(format!(
+            "{}.bak",
+            path.extension().and_then(|e| e.to_str()).unwrap_or("ron")
+        ));
+        std::fs::copy(&path, &bak).map_err(|e| format!("failed to back up {}: {e}", path.display()))?;
+    }
+    std::fs::write(&path, contents).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
 #[cfg(test)]
@@ -1042,6 +1144,30 @@ mod tests {
     }
 
     #[test]
+    fn save_project_round_trips_the_sample() {
+        // Load the sample, Save All to a scratch dir, reload, and compare every
+        // authored field — the plan9 safety net for the whole editor.
+        let original = load_project("assets/projects/sample").expect("sample loads");
+        let tmp = std::env::temp_dir().join(format!("deepgrid_saveall_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let mut to_save = load_project("assets/projects/sample").expect("sample loads");
+        to_save.dir = tmp.clone();
+        save_project(&to_save).expect("save all");
+        let reloaded = load_project(&tmp).expect("reload");
+        assert_eq!(reloaded.name, original.name);
+        assert_eq!(reloaded.limits, original.limits);
+        assert_eq!(reloaded.party, original.party);
+        assert_eq!(reloaded.characters, original.characters);
+        assert_eq!(reloaded.items, original.items);
+        assert_eq!(reloaded.monsters, original.monsters);
+        assert_eq!(reloaded.magics, original.magics);
+        assert_eq!(reloaded.levels, original.levels);
+        assert_eq!(reloaded.rules, original.rules);
+        assert_eq!(reloaded.initial_flags, original.initial_flags);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn sample_project_loads() {
         // Guards every sample RON file (project/characters/items/level) against
         // schema drift — the same load path the runtime uses.
@@ -1074,6 +1200,11 @@ mod tests {
             monsters: vec![],
             magics: vec![],
             rules: RulesConfig::default(),
+            initial_flags: vec![],
+            characters_path: "characters.ron".into(),
+            items_path: String::new(),
+            monsters_path: String::new(),
+            magics_path: String::new(),
         };
         let party = project.build_party();
         assert_eq!(party.len(), 1);

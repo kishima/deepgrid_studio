@@ -41,6 +41,12 @@ pub struct Resting {
     pub active: bool,
 }
 
+/// In-progress drag (plan9 DnD): the slot the pointer grabbed an item from.
+#[derive(Resource, Default)]
+pub struct DragState {
+    from: Option<SlotRef>,
+}
+
 /// The spawned data-screen root, so it can be despawned on close.
 #[derive(Resource, Default)]
 pub struct DataScreenRoot(Option<Entity>);
@@ -114,7 +120,50 @@ pub fn init(app: &mut App) {
     app.init_resource::<SelectedSlot>()
         .init_resource::<Resting>()
         .init_resource::<DataScreenRoot>()
+        .init_resource::<DragState>()
         .add_event::<PlaceRequest>();
+}
+
+/// Drag & drop between slots (plan9): grab an item on left-press over a filled
+/// slot, drop it on another slot at release (swapping occupants). Click-select +
+/// action buttons still work — DnD is additive, and the autotest path is the
+/// button API. Equip/unequip by dragging to/from an equipment slot.
+#[allow(clippy::too_many_arguments)]
+pub fn data_screen_drag(
+    screen: Res<DataScreen>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut drag: ResMut<DragState>,
+    mut party: ResMut<Party>,
+    selected: Res<SelectedMember>,
+    mut log: ResMut<MessageLog>,
+    slots: Query<(&Interaction, &SlotButton)>,
+) {
+    if !screen.open {
+        drag.from = None;
+        return;
+    }
+    let hovered = slots
+        .iter()
+        .find(|(i, _)| matches!(i, Interaction::Hovered | Interaction::Pressed))
+        .map(|(_, s)| s.0);
+    let Some(member) = party.members.get_mut(selected.index) else {
+        return;
+    };
+    if mouse.just_pressed(MouseButton::Left)
+        && let Some(h) = hovered
+        && member.inventory.get(h).is_some()
+    {
+        drag.from = Some(h);
+    }
+    if mouse.just_released(MouseButton::Left) {
+        if let (Some(from), Some(to)) = (drag.from, hovered)
+            && from != to
+        {
+            member.inventory.move_or_swap(from, to);
+            log.push("持ち替えた");
+        }
+        drag.from = None;
+    }
 }
 
 /// Open/close the overlay when `DataScreen.open` flips (or the world's magic

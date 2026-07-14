@@ -46,7 +46,7 @@ fn default_facing() -> Facing {
 /// glTF animation clip **names** (robust to pack re-indexing). KayKit skeletons
 /// have e.g. "Idle" "Walking_A" "1H_Melee_Attack_Slice_Diagonal" "Hit_A"
 /// "Death_A" (assets/models/README.md).
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MonsterAnims {
     pub idle: String,
     pub walk: String,
@@ -57,7 +57,7 @@ pub struct MonsterAnims {
 
 /// A monster definition (`monsters.ron`). Original ranges (defense 0..32767, …)
 /// are reference values and unenforced.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MonsterDef {
     pub id: String,
     pub name: String,

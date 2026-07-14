@@ -308,6 +308,22 @@ impl Inventory {
         self.cell_mut(r).and_then(|c| c.as_mut())
     }
 
+    /// Move the item at `from` to `to`, swapping with any occupant (plan9 DnD).
+    /// After lifting both items the destinations are free, so the puts succeed.
+    pub fn move_or_swap(&mut self, from: SlotRef, to: SlotRef) {
+        if from == to {
+            return;
+        }
+        let a = self.take(from);
+        let b = self.take(to);
+        if let Some(a) = a {
+            let _ = self.put(to, a);
+        }
+        if let Some(b) = b {
+            let _ = self.put(from, b);
+        }
+    }
+
     /// Remove and return the item at `r` (if any).
     pub fn take(&mut self, r: SlotRef) -> Option<ItemInstance> {
         self.cell_mut(r).and_then(|c| c.take())

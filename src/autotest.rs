@@ -1539,6 +1539,7 @@ pub fn run_gimmick(
     refs: GimmickRefs,
     mut script: ResMut<ScriptedInput>,
     mut interact: EventWriter<FrontInteract>,
+    mut wall_write: EventWriter<crate::event::WallWriteRequest>,
     mut data: ResMut<DataScreen>,
     monsters: Query<(Entity, &Monster)>,
     floor_items: Query<&FloorItem>,
@@ -1917,11 +1918,39 @@ pub fn run_gimmick(
             _ => {
                 if player.pos.floor == 2 {
                     script.active = false;
-                    println!("[autotest] PASS hole-and-vert: hole drops, vertical horoscope is one-way");
-                    println!("[autotest] ALL PASS (42 steps)");
-                    exit.send(AppExit::Success);
+                    t.next_step("hole-and-vert: hole drops, vertical horoscope is one-way");
                 } else if clock.cycle >= t.mark_cycle + 12 {
                     fail(&t, "hole-and-vert", format!("許可方向を登れない (floor {})", player.pos.floor), &mut exit);
+                }
+            }
+        },
+
+        // ---- 43: writing on a writable wall, then reading it back -------------
+        43 => match t.phase {
+            0 => {
+                // Give a member a pencil, face the writable wall (34,21,0).
+                let _ = party.members[0].inventory.pickup(ItemInstance::new("pencil"));
+                player.pos = GridPos::new(33, 21, 0);
+                player.facing = Facing::East; // front = (34,21,0) WritableWall
+                wall_write.send(crate::event::WallWriteRequest { text: "テストのかきこみ".into() });
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                // After the write applies, read the wall (Space / 見る).
+                if clock.cycle > t.mark_cycle {
+                    interact.send(FrontInteract { pos: GridPos::new(34, 21, 0) });
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 2;
+                }
+            }
+            _ => {
+                if log.contains("テストのかきこみ") {
+                    println!("[autotest] PASS wall-write: pencil writes, 見る reads it back");
+                    println!("[autotest] ALL PASS (43 steps)");
+                    exit.send(AppExit::Success);
+                } else if clock.cycle >= t.mark_cycle + 10 {
+                    fail(&t, "wall-write", "書いた本文が読めない".into(), &mut exit);
                 }
             }
         },

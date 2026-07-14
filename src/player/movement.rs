@@ -240,34 +240,6 @@ pub fn setup_player(mut commands: Commands, dungeon: Res<Dungeon>) {
     commands.insert_resource(MoveAnim::default());
 }
 
-/// Map the movement/climb keys to at most one command via `is_active` (usually
-/// `pressed` or `just_pressed`). Door toggling is handled separately (edge-only)
-/// so holding the key can't flap the door.
-fn desired_command(mut is_active: impl FnMut(KeyCode) -> bool) -> Option<Command> {
-    // Arrow keys mirror WASD/QE with a classic-crawler layout (user feedback
-    // 2026-07-14): ↑/↓ = forward/backward, ←/→ = turn in place (strafing stays
-    // on A/D only).
-    if is_active(KeyCode::KeyW) || is_active(KeyCode::ArrowUp) {
-        Some(Command::Move(Action::Forward))
-    } else if is_active(KeyCode::KeyS) || is_active(KeyCode::ArrowDown) {
-        Some(Command::Move(Action::Backward))
-    } else if is_active(KeyCode::KeyA) {
-        Some(Command::Move(Action::StrafeLeft))
-    } else if is_active(KeyCode::KeyD) {
-        Some(Command::Move(Action::StrafeRight))
-    } else if is_active(KeyCode::KeyQ) || is_active(KeyCode::ArrowLeft) {
-        Some(Command::Move(Action::TurnLeft))
-    } else if is_active(KeyCode::KeyE) || is_active(KeyCode::ArrowRight) {
-        Some(Command::Move(Action::TurnRight))
-    } else if is_active(KeyCode::KeyR) {
-        Some(Command::ClimbUp)
-    } else if is_active(KeyCode::KeyF) {
-        Some(Command::ClimbDown)
-    } else {
-        None
-    }
-}
-
 /// The cardinal heading a movement action produces given the current facing, or
 /// `None` for turns.
 fn move_facing(action: Action, facing: Facing) -> Option<Facing> {
@@ -478,6 +450,8 @@ pub struct ActionEvents<'w> {
     interact: EventWriter<'w, crate::event::FrontInteract>,
     /// Party movement mode (plan8): Free ignores footing, Locked refuses moves.
     move_mode: Res<'w, crate::event::MoveMode>,
+    /// Rebindable movement keys (plan9).
+    keybinds: Res<'w, crate::settings::Keybinds>,
 }
 
 /// Drive input, animation, and the camera transform each frame.
@@ -589,7 +563,7 @@ pub fn player_movement(
         // held state would turn a short tap into two steps). Never buffer while
         // falling or with the data screen up.
         let can_buffer = !script.active && !anim.input_locked && !data.open;
-        if let Some(cmd) = desired_command(|k| keys.just_pressed(k)).filter(|_| can_buffer) {
+        if let Some(cmd) = events.keybinds.command_for(|k| keys.just_pressed(k)).filter(|_| can_buffer) {
             anim.buffered = Some(cmd);
         }
     } else {
@@ -603,7 +577,7 @@ pub fn player_movement(
                 .0
                 .take()
                 .or_else(|| anim.buffered.take())
-                .or_else(|| desired_command(|k| keys.pressed(k)))
+                .or_else(|| events.keybinds.command_for(|k| keys.pressed(k)))
         };
         if let Some(cmd) = next {
             match cmd {

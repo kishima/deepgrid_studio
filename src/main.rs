@@ -28,6 +28,7 @@ mod project;
 mod render;
 mod rng;
 mod rules;
+mod settings;
 mod world;
 
 use std::path::PathBuf;
@@ -100,7 +101,10 @@ fn run_play(project: Project) {
     let magic_catalog = project.build_magic_catalog();
     let initial_items = InitialItems(project.levels[0].items.clone());
     let initial_monsters = InitialMonsters(project.levels[0].monsters.clone());
-    let event_flags = event::EventFlags::new(project.limits.event_flags);
+    let mut event_flags = event::EventFlags::new(project.limits.event_flags);
+    for &f in &project.initial_flags {
+        event_flags.set(f, true); // plan9: initial-on flags
+    }
     let game_levels = world::GameLevels { levels: project.levels.clone() };
 
     let mut app = App::new();
@@ -124,6 +128,8 @@ fn run_play(project: Project) {
     .insert_resource(initial_items)
     .insert_resource(initial_monsters)
     .insert_resource(ScriptedInput::default())
+    .insert_resource(settings::Keybinds::load())
+    .init_resource::<settings::KeyConfig>()
     .insert_resource(MessageLog::default())
     .insert_resource(GameClock::default())
     .init_resource::<DataScreen>()
@@ -145,12 +151,14 @@ fn run_play(project: Project) {
     .init_resource::<event::MoveMode>()
     .init_resource::<world::CurrentLevel>()
     .init_resource::<world::LevelStates>()
+    .init_resource::<event::WallWrites>()
     .add_event::<PlayerFell>()
     .add_event::<CycleTick>()
     .add_event::<PickupRequest>()
     .add_event::<PlayerAction>()
     .add_event::<magic::CastMagic>()
     .add_event::<event::FrontInteract>()
+    .add_event::<event::WallWriteRequest>()
     .add_event::<render::TileDirty>()
     .add_event::<world::LevelTransition>();
     data_screen::init(&mut app);
@@ -216,6 +224,7 @@ fn run_play(project: Project) {
             floor_items::handle_pickup.after(player::player_movement),
             monster::player_actions.after(player::player_movement),
             data_screen::data_screen_interactions,
+            data_screen::data_screen_drag.after(data_screen::data_screen_interactions),
             data_screen::data_magic_interactions.after(data_screen::data_screen_interactions),
             floor_items::handle_place.after(data_screen::data_screen_interactions),
             data_screen::toggle_data_screen,
@@ -245,6 +254,7 @@ fn run_play(project: Project) {
         (
             event::front_interact.after(player::player_movement),
             event::entry_triggers.after(player::player_movement),
+            event::apply_wall_write.before(event::front_interact),
             event::debug_gimmick_driver.before(event::entry_triggers),
             event::run_events
                 .after(event::front_interact)
@@ -271,6 +281,7 @@ fn run_play(project: Project) {
             hud::action_icon_clicks,
             hud::move_icon_clicks,
             hud::magic_button_clicks,
+            settings::keyconfig_input,
             portrait::freeze_portraits,
         ),
     );

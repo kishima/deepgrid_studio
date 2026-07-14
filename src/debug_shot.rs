@@ -75,11 +75,28 @@ pub fn debug_shot_enabled() -> bool {
     debug_shot_value().is_some()
 }
 
-/// Whether the requested scene is the editor screen (`DEEPGRID_DEBUG_SHOT=editor`),
-/// which forces edit mode regardless of `--edit`. Editor capture lives in
-/// `editor::shot` (egui on the window isn't captured by Bevy screenshots).
+/// Whether the requested scene is an editor screen (`DEEPGRID_DEBUG_SHOT=editor`
+/// or `editor-<tab>`), which forces edit mode regardless of `--edit`. Editor
+/// capture lives in `editor::shot` (egui on the window isn't captured by Bevy
+/// screenshots).
 pub fn wants_editor() -> bool {
-    debug_shot_value().as_deref() == Some("editor")
+    editor_shot_tab().is_some()
+}
+
+/// Which editor tab a `DEEPGRID_DEBUG_SHOT=editor[-tab]` scene opens, or `None`
+/// for a non-editor scene (plan9). Bare `editor` = the map tab.
+pub fn editor_shot_tab() -> Option<crate::editor::Tab> {
+    use crate::editor::Tab;
+    match debug_shot_value().as_deref() {
+        Some("editor") | Some("editor-map") => Some(Tab::Map),
+        Some("editor-chars") => Some(Tab::Characters),
+        Some("editor-items") => Some(Tab::Items),
+        Some("editor-monsters") => Some(Tab::Monsters),
+        Some("editor-magics") => Some(Tab::Magics),
+        Some("editor-events") => Some(Tab::Events),
+        Some("editor-settings") => Some(Tab::Settings),
+        _ => None,
+    }
 }
 
 /// Startup: if a debug-shot scene is requested, load its command script so the
