@@ -20,6 +20,7 @@ use crate::character::{Character, CharacterState, Party, PartyMember};
 use crate::config::LimitsConfig;
 use crate::dungeon::level::{Floor, Level};
 use crate::dungeon::{Block, Dungeon, Facing, GridPos};
+use crate::event::EventDef;
 use crate::item::{Inventory, ItemCatalog, ItemDef, ItemInstance, ItemPlacement};
 use crate::magic::{MagicCatalog, MagicDef};
 use crate::monster::{MonsterCatalog, MonsterDef, MonsterPlacement};
@@ -85,6 +86,35 @@ struct MapFile {
     /// Monster placements (map format v4; `#[serde(default)]` so v3 files load).
     #[serde(default)]
     monsters: Vec<MonsterPlacement>,
+    /// Writable-wall texts (map v6): `(x, y, floor, text)`.
+    #[serde(default)]
+    wall_texts: Vec<WallText>,
+    /// Stairs / 連絡通路 links (map v6).
+    #[serde(default)]
+    stairs_links: Vec<StairsLink>,
+    /// Events attached to this level (map v6).
+    #[serde(default)]
+    events: Vec<EventDef>,
+}
+
+/// One writable-wall message (plan8). Kept out of `Block` so the block stays
+/// `Copy`; matched to a `WritableWall` cell by coordinate.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct WallText {
+    pub x: i32,
+    pub y: i32,
+    pub floor: usize,
+    pub text: String,
+}
+
+/// A 連絡通路 link: entering the `Stairs` at `from` moves the party to `to` on
+/// `to_level`, facing `to_facing` (plan8).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StairsLink {
+    pub from: (i32, i32, usize),
+    pub to_level: usize,
+    pub to: (i32, i32, usize),
+    pub to_facing: Facing,
 }
 
 /// An in-memory level: the mutable block grids, the player's start, and item
@@ -98,6 +128,29 @@ pub struct LevelData {
     pub items: Vec<ItemPlacement>,
     /// Monsters placed on this level (plan6).
     pub monsters: Vec<MonsterPlacement>,
+    /// Writable-wall texts (plan8), keyed by coordinate.
+    pub wall_texts: Vec<WallText>,
+    /// Stairs links out of this level (plan8).
+    pub stairs_links: Vec<StairsLink>,
+    /// Events attached to this level (plan8).
+    pub events: Vec<EventDef>,
+    /// Door kinds that start open on this level (derived from `!`/`@` glyphs).
+    pub open_doors: Vec<u8>,
+}
+
+impl LevelData {
+    /// The writable-wall text at `(x, y, floor)`, if any.
+    pub fn wall_text_at(&self, x: i32, y: i32, floor: usize) -> Option<&str> {
+        self.wall_texts
+            .iter()
+            .find(|w| w.x == x && w.y == y && w.floor == floor)
+            .map(|w| w.text.as_str())
+    }
+
+    /// The stairs link out of `(x, y, floor)`, if any.
+    pub fn stairs_link_at(&self, x: i32, y: i32, floor: usize) -> Option<&StairsLink> {
+        self.stairs_links.iter().find(|s| s.from == (x, y, floor))
+    }
 }
 
 impl LevelData {
@@ -124,8 +177,9 @@ impl LevelData {
 }
 
 /// Project-format version this build writes. Older versions are still accepted
-/// on load (v1: no characters; v2: no items; v3: no monsters; v4: no magic).
-pub const PROJECT_VERSION: u32 = 5;
+/// on load (v1: no characters; v2: no items; v3: no monsters; v4: no magic;
+/// v5: no events/gimmicks).
+pub const PROJECT_VERSION: u32 = 6;
 
 /// A loaded project: metadata, limits, levels, registered characters + party
 /// roster (v2+), and item definitions (v3+).
@@ -322,6 +376,19 @@ fn char_to_block(c: char) -> Option<Block> {
         '>' => Block::Horoscope { pass_from: Facing::East },
         'n' => Block::Horoscope { pass_from: Facing::North },
         'v' => Block::Horoscope { pass_from: Facing::South },
+        // plan8 terrain / gimmick glyphs.
+        'o' => Block::Hole,
+        'u' => Block::Stairs { up: true },
+        'd' => Block::Stairs { up: false },
+        'W' => Block::WritableWall,
+        'A' => Block::HoroscopeVert { from_below: true },
+        'V' => Block::HoroscopeVert { from_below: false },
+        'K' => Block::Keyhole,
+        'S' => Block::Switch,
+        'P' => Block::FloorPlate,
+        'T' => Block::WarpPoint,
+        // Note: the door-initial-open glyphs '!' / '@' are handled by the caller
+        // (they map to Door{kind} *and* mark the kind open), not here.
         _ => return None,
     })
 }
@@ -342,6 +409,16 @@ pub fn block_to_char(block: Block) -> char {
         Block::Horoscope { pass_from: Facing::East } => '>',
         Block::Horoscope { pass_from: Facing::North } => 'n',
         Block::Horoscope { pass_from: Facing::South } => 'v',
+        Block::Hole => 'o',
+        Block::Stairs { up: true } => 'u',
+        Block::Stairs { up: false } => 'd',
+        Block::WritableWall => 'W',
+        Block::HoroscopeVert { from_below: true } => 'A',
+        Block::HoroscopeVert { from_below: false } => 'V',
+        Block::Keyhole => 'K',
+        Block::Switch => 'S',
+        Block::FloorPlate => 'P',
+        Block::WarpPoint => 'T',
     }
 }
 
@@ -364,6 +441,7 @@ fn level_from_map(map: &MapFile, limits: &LimitsConfig, what: &str) -> Result<Le
     }
 
     let mut floors = Vec::with_capacity(map.floors.len());
+    let mut open_doors: Vec<u8> = Vec::new();
     for (fi, floor) in map.floors.iter().enumerate() {
         if floor.rows.len() != map.height {
             return Err(format!(
@@ -383,8 +461,24 @@ fn level_from_map(map: &MapFile, limits: &LimitsConfig, what: &str) -> Result<Le
                 ));
             }
             for (x, &c) in cols.iter().enumerate() {
-                let block = char_to_block(c)
-                    .ok_or_else(|| format!("{what} floor {fi} row {y} col {x}: unknown block '{c}'"))?;
+                // '!' / '@' are Door{kind 0/1} that additionally start open.
+                let block = match c {
+                    '!' => {
+                        if !open_doors.contains(&0) {
+                            open_doors.push(0);
+                        }
+                        Block::Door { kind: 0 }
+                    }
+                    '@' => {
+                        if !open_doors.contains(&1) {
+                            open_doors.push(1);
+                        }
+                        Block::Door { kind: 1 }
+                    }
+                    _ => char_to_block(c).ok_or_else(|| {
+                        format!("{what} floor {fi} row {y} col {x}: unknown block '{c}'")
+                    })?,
+                };
                 if let Block::Door { kind } = block
                     && (kind as usize) >= limits.door_kinds_per_level
                 {
@@ -403,6 +497,7 @@ fn level_from_map(map: &MapFile, limits: &LimitsConfig, what: &str) -> Result<Le
             blocks,
         });
     }
+    open_doors.sort_unstable();
 
     let level = Level { floors };
     if map.start_floor >= level.floor_count() {
@@ -474,11 +569,26 @@ fn level_from_map(map: &MapFile, limits: &LimitsConfig, what: &str) -> Result<Le
         level,
         items: map.items.clone(),
         monsters: map.monsters.clone(),
+        wall_texts: map.wall_texts.clone(),
+        stairs_links: map.stairs_links.clone(),
+        events: map.events.clone(),
+        open_doors,
     })
 }
 
 /// Serialize a `LevelData` back to the on-disk `MapFile` (block grids -> rows).
 fn map_from_level(data: &LevelData) -> MapFile {
+    // A door of an initially-open kind serialises to '!' / '@' so the open state
+    // round-trips (the DoorStates model is per-kind, so all cells of an open kind
+    // are written open).
+    let glyph = |block: Block| -> char {
+        if let Block::Door { kind } = block
+            && data.open_doors.contains(&kind)
+        {
+            return if kind == 0 { '!' } else { '@' };
+        }
+        block_to_char(block)
+    };
     let floors = data
         .level
         .floors
@@ -487,7 +597,7 @@ fn map_from_level(data: &LevelData) -> MapFile {
             let rows = (0..floor.height)
                 .map(|y| {
                     (0..floor.width)
-                        .map(|x| block_to_char(floor.blocks[y * floor.width + x]))
+                        .map(|x| glyph(floor.blocks[y * floor.width + x]))
                         .collect::<String>()
                 })
                 .collect();
@@ -504,6 +614,9 @@ fn map_from_level(data: &LevelData) -> MapFile {
         floors,
         items: data.items.clone(),
         monsters: data.monsters.clone(),
+        wall_texts: data.wall_texts.clone(),
+        stairs_links: data.stairs_links.clone(),
+        events: data.events.clone(),
     }
 }
 
@@ -729,12 +842,21 @@ mod tests {
             level: Level { floors: vec![floor0, floor1] },
             items: Vec::new(),
             monsters: Vec::new(),
+            wall_texts: Vec::new(),
+            stairs_links: Vec::new(),
+            events: Vec::new(),
+            open_doors: Vec::new(),
         }
     }
 
     #[test]
     fn all_glyphs_round_trip_by_char() {
-        for c in ['#', '.', '~', '^', '%', 'H', '1', '2', '<', '>', 'n', 'v'] {
+        // Every glyph except the door-open aliases '!'/'@' (which collapse to
+        // Door{kind} and re-emit as '1'/'2' unless open — see the level test).
+        for c in [
+            '#', '.', '~', '^', '%', 'H', '1', '2', '<', '>', 'n', 'v',
+            'o', 'u', 'd', 'W', 'A', 'V', 'K', 'S', 'P', 'T',
+        ] {
             let block = char_to_block(c).expect("known glyph");
             assert_eq!(block_to_char(block), c, "glyph {c} did not round-trip");
         }
@@ -747,6 +869,51 @@ mod tests {
         let ron = level_to_ron(&original).expect("serialize");
         let restored = level_from_ron(&ron, &limits, "roundtrip").expect("parse");
         assert_eq!(original, restored);
+    }
+
+    #[test]
+    fn open_door_glyph_round_trips() {
+        // A Door{kind 0} marked open serialises to '!' and reads back open.
+        let limits = LimitsConfig::default();
+        let mut lvl = sample_level();
+        // Put an open kind-0 door in floor 1 and mark it open.
+        lvl.level.floors[1].blocks[6] = Block::Door { kind: 0 };
+        lvl.open_doors = vec![0];
+        let ron = level_to_ron(&lvl).expect("serialize");
+        assert!(ron.contains('!'), "open door should serialise as '!'");
+        let restored = level_from_ron(&ron, &limits, "roundtrip").expect("parse");
+        assert_eq!(restored.open_doors, vec![0]);
+        assert_eq!(restored.level.floors[1].blocks[6], Block::Door { kind: 0 });
+    }
+
+    #[test]
+    fn plan8_glyphs_and_events_round_trip() {
+        use crate::event::{EventAction, EventDef, TriggerKind};
+        let limits = LimitsConfig::default();
+        let mut lvl = sample_level();
+        // Sprinkle new terrain into floor 1 (avoiding the start cell 0,0).
+        lvl.level.floors[1].blocks[3] = Block::Hole; // (3,0)
+        lvl.level.floors[1].blocks[7] = Block::Stairs { up: true }; // (3,1)
+        lvl.level.floors[1].blocks[11] = Block::WritableWall; // (3,2)
+        lvl.wall_texts = vec![WallText { x: 3, y: 2, floor: 1, text: "壁の文字".into() }];
+        lvl.stairs_links = vec![StairsLink {
+            from: (3, 1, 1),
+            to_level: 0,
+            to: (2, 2, 0),
+            to_facing: Facing::North,
+        }];
+        lvl.events = vec![EventDef {
+            id: "ev1".into(),
+            trigger: TriggerKind::SwitchPush,
+            at: (0, 1, 1),
+            delay_cycles: 3,
+            flags: vec![],
+            join: crate::event::FlagJoin::And,
+            actions: vec![EventAction::SetFlag { flag: 2, on: true }],
+        }];
+        let ron = level_to_ron(&lvl).expect("serialize");
+        let restored = level_from_ron(&ron, &limits, "roundtrip").expect("parse");
+        assert_eq!(lvl, restored);
     }
 
     #[test]

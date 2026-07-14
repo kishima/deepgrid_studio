@@ -126,6 +126,7 @@ pub enum EventAction {
     SetMoveMode { mode: MoveMode },      // Normal / Free(空中歩行) / Locked
     OperateSwitch { event: String, on: bool },
     SetFlag { flag: usize, on: bool },
+    SetDoor { kind: u8, open: bool },    // 「ドアの開閉」(14種の1つ。実装時に追加)
     EndChain,
     Loop,                                // 先頭へ(delay を再適用)
 }

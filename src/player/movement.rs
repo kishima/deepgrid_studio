@@ -5,6 +5,7 @@ use bevy::pbr::ClusterConfig;
 use bevy::prelude::*;
 
 use crate::dungeon::{Dungeon, DoorStates, Facing, GridPos};
+use crate::event::MoveMode;
 use crate::render::BLOCK_SIZE;
 
 /// Duration of one step or one 90° turn, in seconds
@@ -57,6 +58,8 @@ pub enum Command {
     Throw,
     /// Steal from the monster ahead (plan6).
     Steal,
+    /// Press the block ahead: keyhole / switch / read a writable wall (plan8).
+    Interact,
 }
 
 /// Emitted once when a fall finishes, carrying how many floors were dropped
@@ -130,6 +133,31 @@ impl MoveAnim {
 
     fn push(&mut self, seg: Segment) {
         self.segments.push_back(seg);
+    }
+
+    /// Clear any in-flight animation (plan8: teleport / level transition snaps).
+    pub fn reset(&mut self) {
+        self.segments.clear();
+        self.elapsed = 0.0;
+        self.buffered = None;
+        self.input_locked = false;
+        self.pending_fall = 0;
+    }
+}
+
+/// Snap the camera to the player's canonical pose when the `Player` resource
+/// changes with no animation in flight — i.e. after a teleport / level
+/// transition (plan8), where no movement animation ran.
+pub fn snap_camera_on_teleport(
+    player: Res<Player>,
+    anim: Res<MoveAnim>,
+    mut cameras: Query<&mut Transform, With<PlayerCamera>>,
+) {
+    if !player.is_changed() || !anim.is_idle() {
+        return;
+    }
+    if let Ok(mut t) = cameras.get_single_mut() {
+        *t = canonical_transform(&player);
     }
 }
 
@@ -273,7 +301,7 @@ fn push_fall(anim: &mut MoveAnim, x: i32, y: i32, from_floor: usize, to_floor: u
 
 /// Begin a grid move. Rejected (no animation) if the exit/entry rules forbid it.
 /// A successful entry into an unsupported cell chains a fall.
-fn start_move(action: Action, player: &mut Player, anim: &mut MoveAnim, dungeon: &Dungeon, doors: &DoorStates) {
+fn start_move(action: Action, free: bool, player: &mut Player, anim: &mut MoveAnim, dungeon: &Dungeon, doors: &DoorStates) {
     let level = &dungeon.level;
     let from_pos = eye_of(player.pos);
     let from_yaw = player.facing.yaw();
@@ -320,33 +348,51 @@ fn start_move(action: Action, player: &mut Player, anim: &mut MoveAnim, dungeon:
         ease: Ease::InOut,
     });
 
-    // Then fall if the tile has no footing.
-    let land = level.landing_floor(dest_pos.x, dest_pos.y, dest_pos.floor);
-    if land < dest_pos.floor {
-        push_fall(anim, dest_pos.x, dest_pos.y, dest_pos.floor, land, from_yaw);
-        player.pos.floor = land;
+    // Then fall if the tile has no footing — unless free-flying (plan8).
+    if !free {
+        let land = level.landing_floor(dest_pos.x, dest_pos.y, dest_pos.floor);
+        if land < dest_pos.floor {
+            push_fall(anim, dest_pos.x, dest_pos.y, dest_pos.floor, land, from_yaw);
+            player.pos.floor = land;
+        }
     }
 }
 
 /// Begin a ladder climb up or down, per plan2's height/support rules. Rejected
 /// (no animation) if the move isn't allowed.
-fn start_climb(up: bool, player: &mut Player, anim: &mut MoveAnim, dungeon: &Dungeon, doors: &DoorStates) {
+fn start_climb(up: bool, free: bool, player: &mut Player, anim: &mut MoveAnim, dungeon: &Dungeon, doors: &DoorStates) {
     let level = &dungeon.level;
-    // Must be standing on a ladder to climb.
-    if !level.block_at(player.pos).is_some_and(|b| b.is_ladder()) {
+    // Free flight (plan8 MoveMode::Free) rises/descends anywhere in bounds.
+    if free {
+        let tf = if up {
+            let t = player.pos.floor + 1;
+            if t >= level.floor_count() { return; }
+            t
+        } else {
+            if player.pos.floor == 0 { return; }
+            player.pos.floor - 1
+        };
+        let from_pos = eye_of(player.pos);
+        let yaw = player.facing.yaw();
+        player.pos.floor = tf;
+        anim.push(Segment { from_pos, to_pos: eye_of(player.pos), from_yaw: yaw, to_yaw: yaw, duration: CLIMB_DURATION, ease: Ease::InOut });
+        return;
+    }
+    // Must be standing on a ladder (or vertical horoscope) to climb.
+    if !level.block_at(player.pos).is_some_and(|b| b.is_ladder() || matches!(b, crate::dungeon::Block::HoroscopeVert { .. })) {
         return;
     }
 
     let target_floor = if up {
         let tf = player.pos.floor + 1;
-        // Up requires the ceiling to be open, i.e. the cell directly above is a
-        // ladder to continue on.
+        // Up requires the cell above to admit an upward climb (a ladder, or a
+        // vertical horoscope allowing the upward direction).
         if tf >= level.floor_count() {
             return;
         }
         if !level
             .block_at(GridPos::new(player.pos.x, player.pos.y, tf))
-            .is_some_and(|b| b.is_ladder())
+            .is_some_and(|b| b.allows_climb(true))
         {
             return;
         }
@@ -357,8 +403,14 @@ fn start_climb(up: bool, player: &mut Player, anim: &mut MoveAnim, dungeon: &Dun
         }
         let tf = player.pos.floor - 1;
         let below = level.block_at(GridPos::new(player.pos.x, player.pos.y, tf));
-        // Down requires the cell below to be a ladder or otherwise enterable.
-        if !below.is_some_and(|b| b.is_ladder() || b.allows_vertical(doors)) {
+        // Down requires the cell below to admit a downward move: a ladder, a
+        // vertical horoscope allowing down, or an otherwise-enterable cell.
+        let ok = match below {
+            Some(b) if matches!(b, crate::dungeon::Block::HoroscopeVert { .. }) => b.allows_climb(false),
+            Some(b) => b.is_ladder() || b.allows_vertical(doors),
+            None => false,
+        };
+        if !ok {
             return;
         }
         tf
@@ -394,11 +446,11 @@ fn toggle_front_door(player: &Player, dungeon: &Dungeon, doors: &mut DoorStates)
     }
 }
 
-fn start_command(cmd: Command, player: &mut Player, anim: &mut MoveAnim, dungeon: &Dungeon, doors: &mut DoorStates) {
+fn start_command(cmd: Command, free: bool, player: &mut Player, anim: &mut MoveAnim, dungeon: &Dungeon, doors: &mut DoorStates) {
     match cmd {
-        Command::Move(action) => start_move(action, player, anim, dungeon, doors),
-        Command::ClimbUp => start_climb(true, player, anim, dungeon, doors),
-        Command::ClimbDown => start_climb(false, player, anim, dungeon, doors),
+        Command::Move(action) => start_move(action, free, player, anim, dungeon, doors),
+        Command::ClimbUp => start_climb(true, free, player, anim, dungeon, doors),
+        Command::ClimbDown => start_climb(false, free, player, anim, dungeon, doors),
         Command::ToggleDoor => toggle_front_door(player, dungeon, doors),
         // Handled instantly in `player_movement` before reaching here.
         Command::Get
@@ -407,7 +459,8 @@ fn start_command(cmd: Command, player: &mut Player, anim: &mut MoveAnim, dungeon
         | Command::Guard
         | Command::Concentrate
         | Command::Throw
-        | Command::Steal => {}
+        | Command::Steal
+        | Command::Interact => {}
     }
 }
 
@@ -421,6 +474,10 @@ pub struct ActionEvents<'w> {
     icon_move: ResMut<'w, crate::hud::IconMove>,
     /// Which data-screen tab to show (plan7): the M key jumps to the magic tab.
     data_view: ResMut<'w, crate::game_state::DataView>,
+    /// "Press the block ahead" requests (plan8 keyhole / switch / writable wall).
+    interact: EventWriter<'w, crate::event::FrontInteract>,
+    /// Party movement mode (plan8): Free ignores footing, Locked refuses moves.
+    move_mode: Res<'w, crate::event::MoveMode>,
 }
 
 /// Drive input, animation, and the camera transform each frame.
@@ -498,11 +555,14 @@ pub fn player_movement(
         }
         if !data.open {
             if keys.just_pressed(KeyCode::Space) {
-                // Space multiplexes: attack a monster ahead, else toggle a door.
-                if occ.contains(front_tile(&player)) {
+                // Space multiplexes: attack a monster ahead, else toggle a door
+                // and press any keyhole / switch / writable wall (plan8).
+                let front = front_tile(&player);
+                if occ.contains(front) {
                     events.combat.send(PlayerAction::Attack);
                 } else {
                     toggle_front_door(&player, &dungeon, &mut doors);
+                    events.interact.send(crate::event::FrontInteract { pos: front });
                 }
             }
             if keys.just_pressed(KeyCode::KeyG) {
@@ -571,15 +631,22 @@ pub fn player_movement(
                 Command::Steal if !data.open => {
                     events.combat.send(PlayerAction::Steal);
                 }
+                Command::Interact if !data.open => {
+                    events.interact.send(crate::event::FrontInteract { pos: front_tile(&player) });
+                }
                 // World commands are ignored while the data screen is open.
                 _ if data.open => {}
+                // Movement is refused entirely while locked (cutscene, plan8).
+                Command::Move(_) | Command::ClimbUp | Command::ClimbDown
+                    if matches!(*events.move_mode, MoveMode::Locked) => {}
                 // A translation is refused when any member is overloaded or a
                 // monster blocks the destination; turns are always allowed.
                 Command::Move(action) if move_facing(action, player.facing).is_some() => {
                     let dir = move_facing(action, player.facing).unwrap();
                     let (dx, dy) = dir.delta();
                     let dest = GridPos::new(player.pos.x + dx, player.pos.y + dy, player.pos.floor);
-                    if let Some(idx) = party.overweight_member(&catalog) {
+                    let free = matches!(*events.move_mode, MoveMode::Free);
+                    if !free && let Some(idx) = party.overweight_member(&catalog) {
                         if !*overweight_warned {
                             log.push(format!(
                                 "{}は動けない! 荷物が重すぎる",
@@ -592,12 +659,13 @@ pub fn player_movement(
                         events.combat.send(PlayerAction::Attack);
                     } else {
                         *overweight_warned = false;
-                        start_command(cmd, &mut player, &mut anim, &dungeon, &mut doors);
+                        start_command(cmd, free, &mut player, &mut anim, &dungeon, &mut doors);
                     }
                 }
                 _ => {
                     *overweight_warned = false;
-                    start_command(cmd, &mut player, &mut anim, &dungeon, &mut doors);
+                    let free = matches!(*events.move_mode, MoveMode::Free);
+                    start_command(cmd, free, &mut player, &mut anim, &dungeon, &mut doors);
                 }
             }
         }

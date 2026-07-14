@@ -1,0 +1,50 @@
+// DeepGrid Studio sample level01 — map format v6 (plan8). A small showcase level
+// reached via the stairs at (20,10,1) on level00. Demonstrates keyhole, switch,
+// writable wall, a visible warp, and the return stairs — all walkable.
+//
+// Legend as level00. `d` return stairs, `K` keyhole, `S` switch, `W` writable
+// wall, `T` warp point.
+(
+    width: 12,
+    height: 12,
+    start_x: 1,
+    start_y: 1,
+    start_floor: 0,
+    start_facing: East,
+    floors: [
+        (rows: [
+            "############",
+            "#.d........#",
+            "#..........#",
+            "#..........#",
+            "#..K.......#",
+            "#..........#",
+            "#....S.....#",
+            "#..........#",
+            "#......W...#",
+            "#........T.#",
+            "#..........#",
+            "############",
+        ]),
+    ],
+    items: [],
+    monsters: [],
+    wall_texts: [
+        (x: 7, y: 8, floor: 0, text: "だんだんダンジョンへ ようこそ。ここは 第2レベル。"),
+    ],
+    // Return to level00's hall (next to the stairs we came down).
+    stairs_links: [
+        (from: (2, 1, 0), to_level: 0, to: (20, 11, 1), to_facing: North),
+    ],
+    events: [
+        // Keyhole: needs the bronze key; drops bread when used.
+        (id: "l1_keyhole", trigger: Keyhole(key_item: "key_bronze"), at: (3, 4, 0),
+         actions: [SpawnItem(item: "bread", x: 4, y: 4, floor: 0)]),
+        // Toggle switch: drops a glow stone on every flip.
+        (id: "l1_switch", trigger: SwitchToggle, at: (5, 6, 0),
+         actions: [SpawnItem(item: "glow_stone", x: 6, y: 6, floor: 0)]),
+        // Visible warp: step on it to jump across the room.
+        (id: "l1_warp", trigger: WarpPoint(hidden: false), at: (9, 9, 0),
+         actions: [Warp(level: 0, x: 1, y: 10, floor: 0, facing: South)]),
+    ],
+)

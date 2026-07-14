@@ -32,6 +32,9 @@ fn scene_script(value: &str) -> VecDeque<Command> {
         "light" => vec![],
         // Brew a potion and open the data screen (driver handles it).
         "potion" => vec![],
+        // plan8 gimmick scenes: the driver teleports to a viewpoint on the
+        // autotest fixtures once the world settles (no scripted movement).
+        "plate" | "warp" | "stairs" | "hole" => vec![],
         // Step up to the sentinel and attack it (shows a combat message).
         "combat" => vec![Move(TurnRight), Move(Forward), Attack],
         // Turn South to face the floor items (sword, chest, barrel, glow stone).

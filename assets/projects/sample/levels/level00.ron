@@ -1,19 +1,15 @@
-// DeepGrid Studio sample level — map format v2. Three stacked floors, 40×40.
-// floors[0] is the lowest. Active area: roughly x1..24, y1..14.
+// DeepGrid Studio sample level00 — map format v6 (plan8). Three stacked floors,
+// 40×40. floors[0] is the lowest.
 //
-// Legend: '#'=Wall  '.'=Empty  '~'=Water  '^'=Fire  '%'=Poison  'H'=Ladder
-//         '1'/'2'=Door kind 0/1   '<'=West '>'=East 'n'=North 'v'=South Horoscope
+// Legend: '#'Wall '.'Empty '~'Water '^'Fire '%'Poison 'H'Ladder '1'/'2'Door0/1
+//   '<>nv'Horoscope  'o'Hole 'u'/'d'Stairs(up/down) 'W'WritableWall
+//   'A'/'V'VertHoroscope(up/down-only) 'K'Keyhole 'S'Switch 'P'FloorPlate 'T'Warp
+//   '!'/'@'Door0/1 initially-open.
 //
-// The player starts on the MIDDLE floor (floor 1) at (4,4) facing East, looking
-// across a pit that opens onto the room on floor 0 below. Widened 2026-07-14
-// (user feedback: the demo map was too cramped); every previously-open tile is
-// still open and all special tiles kept their coordinates, so the scripted
-// DEEPGRID_DEBUG_SHOT scenes and the autotest suite stay valid:
-//   fall  : walk East off the ledge → drop into the floor-0 room.
-//   ladder: turn South, walk to the ladder at (4,7), climb up to floor 2.
-//   door  : turn West, open the kind-0 door directly ahead at (3,4).
-// New: a return ladder at (11,4) links the floor-0 room back up to floor 1
-// (falling is no longer a dead end); floor 1 has a large pillared hall.
+// Play area (floor1) is the start hall around (4,4); a showcase stairs at
+// (20,10,1) descends to level01. The isolated room at cols25-34 (floors 0-2)
+// holds the plan8 autotest fixtures (events matched by coordinate); it is walled
+// off from the play area so it never disturbs the existing 33-step suite.
 (
     width: 40,
     height: 40,
@@ -22,7 +18,7 @@
     start_floor: 1,
     start_facing: East,
     floors: [
-        // ---- floor 0 (bottom): room under the pit + return ladder ----
+        // ---- floor 0 (bottom) ----
         (rows: [
             "########################################",
             "########################################",
@@ -43,13 +39,13 @@
             "########################################",
             "########################################",
             "########################################",
-            "########################################",
-            "########################################",
-            "########################################",
-            "########################################",
-            "########################################",
-            "########################################",
-            "########################################",
+            "#########################.....T....#####",
+            "#########################..........#####",
+            "#########################..........#####",
+            "#########################u.........#####",
+            "#########################..........#####",
+            "#########################..........#####",
+            "#########################..........#####",
             "########################################",
             "########################################",
             "########################################",
@@ -65,7 +61,7 @@
             "########################################",
             "########################################",
         ]),
-        // ---- floor 1 (middle): start, pit, doors, ladder, pool, big hall ----
+        // ---- floor 1 (middle): start hall + showcase stairs ----
         (rows: [
             "########################################",
             "####.###################################",
@@ -77,7 +73,7 @@
             "####H..~~..............#################",
             "####...^%..#...#...#...#################",
             "####...................#################",
-            "####.......#...#...#...#################",
+            "####.......#...#...#u..#################",
             "####...................#################",
             "####...................#################",
             "########################################",
@@ -87,8 +83,8 @@
             "########################################",
             "########################################",
             "########################################",
-            "########################################",
-            "########################################",
+            "##########################o#############",
+            "##########################.###HH########",
             "########################################",
             "########################################",
             "########################################",
@@ -108,7 +104,7 @@
             "########################################",
             "########################################",
         ]),
-        // ---- floor 2 (top): open platform (holes trace the floors below) ----
+        // ---- floor 2 (top) ----
         (rows: [
             "########################################",
             "#......................#################",
@@ -117,7 +113,7 @@
             "#......................#################",
             "#......................#################",
             "#......................#################",
-            "#...H..................#################",
+            "#......................#################",
             "#......................#################",
             "#......................#################",
             "#......................#################",
@@ -131,7 +127,7 @@
             "########################################",
             "########################################",
             "########################################",
-            "########################################",
+            "##############################VA########",
             "########################################",
             "########################################",
             "########################################",
@@ -152,24 +148,61 @@
             "########################################",
         ]),
     ],
-    // Item placements (plan5). All on supported floor-1 tiles south/east of the
-    // start (4,4,1); visible when the party turns to face south.
     items: [
         (id: "sword_iron", x: 4, y: 5, floor: 1),
         (id: "chest_wood", x: 5, y: 6, floor: 1),
         (id: "barrel", x: 7, y: 6, floor: 1),
         (id: "glow_stone", x: 8, y: 6, floor: 1),
-        // Teaching scrolls (plan7): pick up and read from the data screen.
         (id: "scroll_heal", x: 7, y: 5, floor: 1),
         (id: "scroll_fire", x: 8, y: 5, floor: 1),
     ],
-    // Monster placements (plan6). The floor-1 sentinel is immobile with sight 0
-    // (for the monster/combat scenes); the floor-0 wanderers can't use ladders,
-    // so they never reach the floor-1 autotest area.
     monsters: [
         (id: "skel_guard", x: 4, y: 6, floor: 1, facing: North),
         (id: "skel_minion", x: 6, y: 3, floor: 0, facing: South),
         (id: "skel_warrior", x: 7, y: 3, floor: 0, facing: West),
         (id: "skel_rogue", x: 5, y: 3, floor: 0, facing: East),
+    ],
+    // Stairs / 連絡通路 links (plan8).
+    stairs_links: [
+        // Showcase: the hall stairs descend to level01.
+        (from: (20, 10, 1), to_level: 1, to: (1, 1, 0), to_facing: East),
+        // Autotest fixture stairs (isolated room).
+        (from: (25, 22, 0), to_level: 1, to: (3, 2, 0), to_facing: North),
+    ],
+    // Events (plan8). The `at_*` events are autotest fixtures in the isolated
+    // room; they are matched to the party by coordinate.
+    events: [
+        (id: "at_plate", trigger: FloorPlate(cond: Step), at: (27, 20, 0),
+         actions: [SpawnMonster(monster: "skel_minion", x: 29, y: 20, floor: 0)]),
+        (id: "at_gate", trigger: FloorPlate(cond: Step), at: (27, 21, 0),
+         flags: [(flag: 10, must_be_on: true)],
+         actions: [SpawnItem(item: "glow_stone", x: 29, y: 21, floor: 0)]),
+        (id: "at_or", trigger: FloorPlate(cond: Step), at: (27, 23, 0), join: Or,
+         flags: [(flag: 10, must_be_on: true), (flag: 11, must_be_on: true)],
+         actions: [SpawnItem(item: "bread", x: 29, y: 23, floor: 0)]),
+        (id: "at_setflag", trigger: SwitchPush, at: (27, 22, 0),
+         actions: [SetFlag(flag: 10, on: true)]),
+        (id: "at_delay", trigger: SwitchPush, at: (28, 20, 0), delay_cycles: 5,
+         actions: [SetFlag(flag: 20, on: true)]),
+        (id: "at_loop", trigger: SwitchPush, at: (28, 21, 0), delay_cycles: 1,
+         actions: [SpawnItem(item: "glow_stone", x: 31, y: 21, floor: 0), Loop]),
+        (id: "at_endchain", trigger: SwitchPush, at: (28, 22, 0), delay_cycles: 1,
+         actions: [SpawnItem(item: "bread", x: 31, y: 22, floor: 0), EndChain, Loop]),
+        (id: "at_keyhole", trigger: Keyhole(key_item: "key_bronze"), at: (26, 24, 0),
+         actions: [SetDoor(kind: 0, open: true)]),
+        (id: "at_sw_oneway", trigger: SwitchOneWay, at: (32, 20, 0),
+         actions: [SpawnItem(item: "glow_stone", x: 33, y: 20, floor: 0)]),
+        (id: "at_sw_toggle", trigger: SwitchToggle, at: (32, 21, 0),
+         actions: [SpawnItem(item: "glow_stone", x: 33, y: 21, floor: 0)]),
+        (id: "at_sw_push", trigger: SwitchPush, at: (32, 22, 0),
+         actions: [SpawnItem(item: "glow_stone", x: 33, y: 22, floor: 0)]),
+        (id: "at_warp", trigger: WarpPoint(hidden: true), at: (30, 24, 0),
+         actions: [Warp(level: 0, x: 26, y: 19, floor: 0, facing: South)]),
+        (id: "at_warp_vis", trigger: WarpPoint(hidden: false), at: (30, 19, 0),
+         actions: [Warp(level: 0, x: 26, y: 20, floor: 0, facing: South)]),
+        (id: "at_setblock", trigger: SwitchPush, at: (33, 20, 0),
+         actions: [SetBlock(x: 33, y: 20, floor: 0, block: Wall)]),
+        (id: "at_setliquid", trigger: SwitchPush, at: (33, 22, 0),
+         actions: [SetLiquid(x: 33, y: 22, floor: 0, kind: Some(Water))]),
     ],
 )

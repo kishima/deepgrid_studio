@@ -223,6 +223,12 @@ impl Monster {
         }
     }
 
+    /// Builder: set the carry list (used by the spawn factory).
+    pub fn with_carry(mut self, carry: Vec<String>) -> Self {
+        self.carry = carry;
+        self
+    }
+
     /// The tiles this monster occupies (2×2 for `large`, else 1).
     fn footprint(&self, large: bool) -> Vec<GridPos> {
         if large {
@@ -289,28 +295,29 @@ pub fn setup_monsters(
         let Some(def) = catalog.get(&p.id) else {
             continue;
         };
-        let pos = GridPos::new(p.x, p.y, p.floor);
-        let transform = Transform::from_translation(tile_center(pos))
-            .with_rotation(Quat::from_rotation_y(model_yaw(p.facing)))
-            .with_scale(Vec3::splat(MONSTER_SCALE));
-        commands.spawn((
+        spawn_monster_entity(&mut commands, &asset_server, def, GridPos::new(p.x, p.y, p.floor), p.facing);
+    }
+}
+
+/// Spawn one live monster entity (model + animation graph), tagged `LevelScoped`
+/// so a level transition clears it. Shared by startup, the SpawnMonster event
+/// (plan8), and level restore. `carry` defaults to the def's carry items; pass a
+/// custom hp/pos via the restore path if needed.
+pub fn spawn_monster_entity(
+    commands: &mut Commands,
+    asset_server: &AssetServer,
+    def: &MonsterDef,
+    pos: GridPos,
+    facing: Facing,
+) -> Entity {
+    let transform = Transform::from_translation(tile_center(pos))
+        .with_rotation(Quat::from_rotation_y(model_yaw(facing)))
+        .with_scale(Vec3::splat(MONSTER_SCALE));
+    commands
+        .spawn((
             SceneRoot(asset_server.load(GltfAssetLabel::Scene(0).from_asset(def.model.clone()))),
             transform,
-            Monster {
-                def_id: def.id.clone(),
-                hp: def.max_hp,
-                pos,
-                facing: p.facing,
-                next_action: 0,
-                next_attack: 0,
-                dead: false,
-                dead_cycle: 0,
-                fleeing: false,
-                carry: def.carry_items.clone(),
-                anim: AnimKind::Idle,
-                anim_hold: 0.0,
-                moved_this_cycle: false,
-            },
+            Monster::new_at(def.id.clone(), def.max_hp, pos, facing).with_carry(def.carry_items.clone()),
             MonsterGraph {
                 gltf: asset_server.load(def.model.clone()),
                 anims: def.anim.clone(),
@@ -319,8 +326,9 @@ pub fn setup_monsters(
                 player: None,
                 playing: None,
             },
-        ));
-    }
+            crate::world::LevelScoped,
+        ))
+        .id()
 }
 
 // -------------------------------------------------------------- animation wiring

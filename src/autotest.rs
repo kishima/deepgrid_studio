@@ -1492,9 +1492,8 @@ pub fn run_magic(
                 .map(|it| it.potion_of.is_none())
                 .unwrap_or(false);
             if liq.is_ok() && potion_slot.is_some() && mp_after_liq < mp_before && drink_ok && hp_after > hp_before && reverted {
-                println!("[autotest] PASS potion: liquefy → drink heals → bottle empties");
-                println!("[autotest] ALL PASS (33 steps)");
-                exit.send(AppExit::Success);
+                // Hand off to the gimmick steps (run_gimmick, step ≥ 34).
+                t.next_step("potion: liquefy → drink heals → bottle empties");
             } else {
                 fail(&t, "potion",
                     format!("liq={} slot={} mp {}→{} drink={drink_ok} hp {hp_before}→{hp_after} reverted={reverted}",
@@ -1502,6 +1501,430 @@ pub fn run_magic(
                     &mut exit);
             }
         }
+
+        _ => {}
+    }
+}
+
+// ==================================================================== gimmick steps
+
+use crate::event::{EventFlags, EventQueue, FrontInteract, TriggerStates};
+use crate::world::CurrentLevel;
+
+/// Read-only world refs for the gimmick steps, bundled to fit the parameter limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct GimmickRefs<'w> {
+    pub flags: Res<'w, EventFlags>,
+    pub triggers: Res<'w, TriggerStates>,
+    pub current: Res<'w, CurrentLevel>,
+    pub dungeon: Res<'w, Dungeon>,
+    pub doors: Res<'w, DoorStates>,
+}
+
+/// Steps 34–42 (plan8): floor plates, flag AND/OR, delay/Loop/EndChain, keyhole,
+/// switch forms, hidden warp, SetBlock/SetLiquid, stairs state, hole + vertical
+/// horoscope. Everything runs through the real event pipeline (teleport onto a
+/// trigger tile, or send a FrontInteract / scripted command) — no direct flag or
+/// queue pokes except clearing a deliberately-infinite Loop.
+#[allow(clippy::too_many_arguments)]
+pub fn run_gimmick(
+    mut t: ResMut<AutoTest>,
+    mut commands: Commands,
+    mut party: ResMut<Party>,
+    mut player: ResMut<Player>,
+    clock: Res<GameClock>,
+    log: Res<MessageLog>,
+    item_catalog: Res<ItemCatalog>,
+    mut queue: ResMut<EventQueue>,
+    refs: GimmickRefs,
+    mut script: ResMut<ScriptedInput>,
+    mut interact: EventWriter<FrontInteract>,
+    mut data: ResMut<DataScreen>,
+    monsters: Query<(Entity, &Monster)>,
+    floor_items: Query<&FloorItem>,
+    mut exit: EventWriter<AppExit>,
+) {
+    if t.step < 34 || t.fatal.is_some() {
+        return;
+    }
+    let fail = |t: &AutoTest, name: &str, why: String, exit: &mut EventWriter<AppExit>| {
+        eprintln!("[autotest] FAIL {name}: {why}");
+        eprintln!("[autotest] {} step(s) passed before the failure", t.step);
+        exit.send(AppExit::error());
+    };
+    let item_count = |x: i32, y: i32, f: usize, id: &str| {
+        floor_items
+            .iter()
+            .filter(|it| it.pos == GridPos::new(x, y, f) && it.instance.def_id == id)
+            .count()
+    };
+    let monster_at = |x: i32, y: i32, f: usize| monsters.iter().any(|(_, m)| !m.dead && m.pos == GridPos::new(x, y, f));
+
+    match t.step {
+        // ---- 34: a floor plate (Step) spawns a monster ----------------------
+        34 => match t.phase {
+            0 => {
+                data.open = false;
+                script.active = false;
+                // Clean slate: remove every existing monster.
+                for (e, _) in &monsters {
+                    commands.entity(e).despawn_recursive();
+                }
+                player.pos = GridPos::new(26, 19, 0); // neutral tile (arm the edge)
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                // Step onto the plate at (27,20,0) → SpawnMonster at (29,20,0).
+                if clock.cycle > t.mark_cycle {
+                    player.pos = GridPos::new(27, 20, 0);
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 2;
+                }
+            }
+            _ => {
+                if monster_at(29, 20, 0) {
+                    t.next_step("plate-step: stepping the plate spawns a monster");
+                } else if clock.cycle >= t.mark_cycle + 8 {
+                    fail(&t, "plate-step", "しかけ床でモンスターが湧かない".into(), &mut exit);
+                }
+            }
+        },
+
+        // ---- 35: flag AND/OR gating ------------------------------------------
+        35 => match t.phase {
+            0 => {
+                player.pos = GridPos::new(26, 19, 0);
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                // Step onto the AND-gated plate with flag 10 OFF → no spawn.
+                player.pos = GridPos::new(27, 21, 0);
+                t.mark_cycle = clock.cycle;
+                t.phase = 2;
+            }
+            2 => {
+                if clock.cycle >= t.mark_cycle + 3 {
+                    if item_count(29, 21, 0, "glow_stone") != 0 {
+                        fail(&t, "flags-andor", "フラグOFFなのに発火した".into(), &mut exit);
+                        return;
+                    }
+                    // Turn flag 10 on via the switch, then leave the plate.
+                    interact.send(FrontInteract { pos: GridPos::new(27, 22, 0) });
+                    player.pos = GridPos::new(26, 19, 0);
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 3;
+                }
+            }
+            3 => {
+                // Once flag 10 is on, re-step the AND plate → spawn.
+                if refs.flags.get(10) {
+                    player.pos = GridPos::new(27, 21, 0);
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 4;
+                } else if clock.cycle >= t.mark_cycle + 8 {
+                    fail(&t, "flags-andor", "SetFlagが効かない".into(), &mut exit);
+                }
+            }
+            4 => {
+                if item_count(29, 21, 0, "glow_stone") >= 1 {
+                    // OR plate: flag 10 on satisfies the OR.
+                    player.pos = GridPos::new(27, 23, 0);
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 5;
+                } else if clock.cycle >= t.mark_cycle + 8 {
+                    fail(&t, "flags-andor", "AND成立後も発火しない".into(), &mut exit);
+                }
+            }
+            _ => {
+                if item_count(29, 23, 0, "bread") >= 1 {
+                    t.next_step("flags-andor: AND gates, OR fires, SetFlag flips");
+                } else if clock.cycle >= t.mark_cycle + 8 {
+                    fail(&t, "flags-andor", "OR条件で発火しない".into(), &mut exit);
+                }
+            }
+        },
+
+        // ---- 36: delay + Loop + EndChain -------------------------------------
+        36 => match t.phase {
+            0 => {
+                // Fire the delayed switch (flag 20 after 5 cycles), the looping
+                // switch, and the end-chained switch — all via a front press.
+                interact.send(FrontInteract { pos: GridPos::new(28, 20, 0) });
+                interact.send(FrontInteract { pos: GridPos::new(28, 21, 0) });
+                interact.send(FrontInteract { pos: GridPos::new(28, 22, 0) });
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                // Within the delay window, flag 20 must still be off.
+                if clock.cycle >= t.mark_cycle + 2 {
+                    if refs.flags.get(20) {
+                        fail(&t, "delay-loop", "delay前にフラグが立った".into(), &mut exit);
+                        return;
+                    }
+                    t.phase = 2;
+                }
+            }
+            _ => {
+                let loops = item_count(31, 21, 0, "glow_stone");
+                let ends = item_count(31, 22, 0, "bread");
+                if refs.flags.get(20) && loops >= 2 && ends == 1 {
+                    // Stop the infinite loop before moving on.
+                    queue.pending.retain(|q| q.event_id != "at_loop");
+                    t.next_step("delay-loop: delay elapses, Loop repeats, EndChain stops at 1");
+                } else if clock.cycle >= t.mark_cycle + 30 {
+                    fail(&t, "delay-loop", format!("flag20={} loops={loops} ends={ends}", refs.flags.get(20)), &mut exit);
+                }
+            }
+        },
+
+        // ---- 37: keyhole needs the key, fires once ---------------------------
+        37 => match t.phase {
+            0 => {
+                // No key yet: press the keyhole → door stays shut, message shown.
+                player.pos = GridPos::new(26, 23, 0);
+                player.facing = Facing::South; // front = (26,24,0)
+                interact.send(FrontInteract { pos: GridPos::new(26, 24, 0) });
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                if clock.cycle >= t.mark_cycle + 2 {
+                    if refs.doors.is_open(0) {
+                        fail(&t, "keyhole", "鍵なしで開いた".into(), &mut exit);
+                        return;
+                    }
+                    if !log.contains("あう鍵がない") {
+                        fail(&t, "keyhole", "鍵なしメッセージが出ない".into(), &mut exit);
+                        return;
+                    }
+                    // Give the party the key, then press again (scripted Interact).
+                    let _ = party.members[0].inventory.pickup(ItemInstance::new("key_bronze"));
+                    script.queue.push_back(Command::Interact);
+                    script.active = true;
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 2;
+                }
+            }
+            _ => {
+                if refs.doors.is_open(0) && refs.triggers.fired.contains("at_keyhole") {
+                    script.active = false;
+                    t.next_step("keyhole: key opens the door, fires once");
+                } else if clock.cycle >= t.mark_cycle + 12 {
+                    fail(&t, "keyhole", format!("open={} fired={}", refs.doors.is_open(0), refs.triggers.fired.contains("at_keyhole")), &mut exit);
+                }
+            }
+        },
+
+        // ---- 38: switch forms fire different counts --------------------------
+        38 => match t.phase {
+            0 => {
+                // Press each switch three times in one frame.
+                for _ in 0..3 {
+                    interact.send(FrontInteract { pos: GridPos::new(32, 20, 0) }); // OneWay
+                    interact.send(FrontInteract { pos: GridPos::new(32, 21, 0) }); // Toggle
+                    interact.send(FrontInteract { pos: GridPos::new(32, 22, 0) }); // Push
+                }
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            _ => {
+                let one = item_count(33, 20, 0, "glow_stone");
+                let tog = item_count(33, 21, 0, "glow_stone");
+                let push = item_count(33, 22, 0, "glow_stone");
+                if one == 1 && tog == 3 && push == 3 {
+                    t.next_step("switch-forms: OneWay=1, Toggle=3, Push=3");
+                } else if clock.cycle >= t.mark_cycle + 10 {
+                    fail(&t, "switch-forms", format!("one={one} tog={tog} push={push}"), &mut exit);
+                }
+            }
+        },
+
+        // ---- 39: a hidden warp jumps the party -------------------------------
+        39 => match t.phase {
+            0 => {
+                player.pos = GridPos::new(30, 24, 0); // step onto the hidden warp
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            _ => {
+                if player.pos == GridPos::new(26, 19, 0) && player.facing == Facing::South {
+                    t.next_step("warp-hidden: entering the hidden warp jumps position + facing");
+                } else if clock.cycle >= t.mark_cycle + 10 {
+                    fail(&t, "warp-hidden", format!("pos {:?} facing {:?}", player.pos, player.facing), &mut exit);
+                }
+            }
+        },
+
+        // ---- 40: SetBlock walls a tile; SetLiquid floods it ------------------
+        40 => match t.phase {
+            0 => {
+                player.pos = GridPos::new(34, 20, 0);
+                player.facing = Facing::West; // front = (33,20,0)
+                interact.send(FrontInteract { pos: GridPos::new(33, 20, 0) });
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                if refs.dungeon.level.block_at(GridPos::new(33, 20, 0)) == Some(Block::Wall) {
+                    // Try to walk into the new wall — it must be refused.
+                    t.saved_pos = Some(player.pos);
+                    script.queue.push_back(Command::Move(Action::Forward));
+                    script.active = true;
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 2;
+                } else if clock.cycle >= t.mark_cycle + 8 {
+                    fail(&t, "setblock", "SetBlockで壁にならない".into(), &mut exit);
+                }
+            }
+            2 => {
+                if clock.cycle >= t.mark_cycle + 4 {
+                    script.active = false;
+                    if player.pos != t.saved_pos.unwrap() {
+                        fail(&t, "setblock", "壁に入れてしまった".into(), &mut exit);
+                        return;
+                    }
+                    // Now flood a tile and stand in it.
+                    interact.send(FrontInteract { pos: GridPos::new(33, 22, 0) });
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 3;
+                }
+            }
+            3 => {
+                if refs.dungeon.level.block_at(GridPos::new(33, 22, 0)) == Some(Block::Water) {
+                    for m in &mut party.members {
+                        m.state.hp = m.character.stats.max_hp;
+                        m.state.down = false;
+                    }
+                    player.pos = GridPos::new(33, 22, 0);
+                    t.hp_before = party.members.iter().map(|m| m.state.hp).collect();
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 4;
+                } else if clock.cycle >= t.mark_cycle + 8 {
+                    fail(&t, "setblock", "SetLiquidで水にならない".into(), &mut exit);
+                }
+            }
+            _ => {
+                let vulnerable: Vec<usize> = party
+                    .members
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| m.effective_stats(&item_catalog).get(StatKind::LungCapacity) < crate::hazard::WATER_LUNG_THRESHOLD)
+                    .map(|(i, _)| i)
+                    .collect();
+                if clock.cycle >= t.mark_cycle + 14 {
+                    let hurt = !vulnerable.is_empty() && vulnerable.iter().all(|&i| party.members[i].state.hp < t.hp_before[i]);
+                    if hurt {
+                        player.pos = GridPos::new(26, 19, 0); // step out of the water
+                        t.next_step("setblock: wall refuses movement, liquid triggers hazard");
+                    } else {
+                        fail(&t, "setblock", "水hazardが作動しない".into(), &mut exit);
+                    }
+                }
+            }
+        },
+
+        // ---- 41: level state persists across a round trip --------------------
+        41 => match t.phase {
+            0 => {
+                if refs.current.0 != 0 {
+                    return;
+                }
+                // Leave a marker item + a damaged monster on level0.
+                commands.spawn((
+                    FloorItem { instance: ItemInstance::new("glow_stone"), pos: GridPos::new(34, 24, 0) },
+                    crate::world::LevelScoped,
+                ));
+                commands.spawn((
+                    Monster::new_at("skel_rogue", 7, GridPos::new(32, 24, 0), Facing::North),
+                    crate::world::LevelScoped,
+                ));
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                // Give the spawns a couple frames, then take the stairs to level1.
+                if clock.cycle > t.mark_cycle {
+                    player.pos = GridPos::new(25, 22, 0); // level0 stairs
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 2;
+                }
+            }
+            2 => {
+                if refs.current.0 == 1 {
+                    player.pos = GridPos::new(2, 1, 0); // level1 return stairs
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 3;
+                } else if clock.cycle >= t.mark_cycle + 15 {
+                    fail(&t, "stairs-state", "level1へ遷移しない".into(), &mut exit);
+                }
+            }
+            _ => {
+                if refs.current.0 == 0 {
+                    let item_ok = item_count(34, 24, 0, "glow_stone") >= 1;
+                    let mon_ok = monsters.iter().any(|(_, m)| m.hp == 7 && m.def_id == "skel_rogue");
+                    if item_ok && mon_ok {
+                        t.next_step("stairs-state: item + monster state survive the round trip");
+                    } else if clock.cycle >= t.mark_cycle + 15 {
+                        fail(&t, "stairs-state", format!("item={item_ok} mon={mon_ok}"), &mut exit);
+                    }
+                } else if clock.cycle >= t.mark_cycle + 15 {
+                    fail(&t, "stairs-state", "level0へ戻れない".into(), &mut exit);
+                }
+            }
+        },
+
+        // ---- 42: a hole drops you; a vertical horoscope blocks the wrong way --
+        42 => match t.phase {
+            0 => {
+                player.pos = GridPos::new(26, 21, 1);
+                player.facing = Facing::North; // front = the hole (26,20,1)
+                script.queue.push_back(Command::Move(Action::Forward));
+                script.active = true;
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                if player.pos.floor == 0 {
+                    script.active = false;
+                    // Forbidden vertical horoscope above a ladder: climb refused.
+                    player.pos = GridPos::new(30, 21, 1);
+                    script.queue.push_back(Command::ClimbUp);
+                    script.active = true;
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 2;
+                } else if clock.cycle >= t.mark_cycle + 20 {
+                    fail(&t, "hole-and-vert", "穴で落ちない".into(), &mut exit);
+                }
+            }
+            2 => {
+                if clock.cycle >= t.mark_cycle + 6 {
+                    script.active = false;
+                    if player.pos.floor != 1 {
+                        fail(&t, "hole-and-vert", "禁止方向のホロスコープを登れてしまった".into(), &mut exit);
+                        return;
+                    }
+                    // Allowed vertical horoscope above a ladder: climb succeeds.
+                    player.pos = GridPos::new(31, 21, 1);
+                    script.queue.push_back(Command::ClimbUp);
+                    script.active = true;
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 3;
+                }
+            }
+            _ => {
+                if player.pos.floor == 2 {
+                    script.active = false;
+                    println!("[autotest] PASS hole-and-vert: hole drops, vertical horoscope is one-way");
+                    println!("[autotest] ALL PASS (42 steps)");
+                    exit.send(AppExit::Success);
+                } else if clock.cycle >= t.mark_cycle + 12 {
+                    fail(&t, "hole-and-vert", format!("許可方向を登れない (floor {})", player.pos.floor), &mut exit);
+                }
+            }
+        },
 
         _ => {}
     }

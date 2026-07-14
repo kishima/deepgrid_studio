@@ -49,18 +49,40 @@ impl Level {
         self.floor(pos.floor).and_then(|f| f.get(pos.x, pos.y))
     }
 
+    /// Overwrite the block at `pos` (plan8 SetBlock / SetLiquid). No-op if out of
+    /// bounds. Returns the previous block, if any.
+    pub fn set_block(&mut self, pos: GridPos, block: Block) -> Option<Block> {
+        let f = self.floors.get_mut(pos.floor)?;
+        if pos.x < 0 || pos.y < 0 || pos.x as usize >= f.width || pos.y as usize >= f.height {
+            return None;
+        }
+        let idx = pos.y as usize * f.width + pos.x as usize;
+        let prev = f.blocks.get(idx).copied();
+        if let Some(cell) = f.blocks.get_mut(idx) {
+            *cell = block;
+        }
+        prev
+    }
+
     /// Whether the player can stand on cell `(x, y)` of `floor` without falling
     /// (plan2「足場の判定」): a ladder always supports; otherwise the lowest floor
     /// rests on bedrock, and higher floors need a `Wall` directly below (a wall's
     /// top face is the floor above it).
     pub fn is_supported(&self, x: i32, y: i32, floor: usize) -> bool {
-        if self.floor(floor).and_then(|f| f.get(x, y)) == Some(Block::Ladder) {
+        let here = self.floor(floor).and_then(|f| f.get(x, y));
+        // Ladders / stairs / vertical horoscopes support themselves.
+        if here.is_some_and(|b| b.self_supports()) {
             return true;
+        }
+        // A hole never gives footing, even on bedrock or over a wall (plan8).
+        if here.is_some_and(|b| b.is_hole()) {
+            return false;
         }
         if floor == 0 {
             return true;
         }
-        self.floor(floor - 1).and_then(|f| f.get(x, y)) == Some(Block::Wall)
+        // A solid block directly below (its top face is this cell's floor).
+        self.floor(floor - 1).and_then(|f| f.get(x, y)).is_some_and(|b| b.is_solid())
     }
 
     /// The floor the player comes to rest on after entering an unsupported cell
@@ -90,6 +112,25 @@ impl DoorStates {
     pub fn new(kinds: usize) -> Self {
         Self {
             open: vec![false; kinds],
+        }
+    }
+
+    /// State for `kinds` door kinds with the kinds listed in `open_kinds` open
+    /// (a level's initial `!`/`@` doors, plan8).
+    pub fn with_open(kinds: usize, open_kinds: &[u8]) -> Self {
+        let mut s = Self::new(kinds);
+        for &k in open_kinds {
+            if let Some(b) = s.open.get_mut(k as usize) {
+                *b = true;
+            }
+        }
+        s
+    }
+
+    /// Force a door kind open/closed (event action「ドアの開閉」).
+    pub fn set(&mut self, kind: u8, open: bool) {
+        if let Some(state) = self.open.get_mut(kind as usize) {
+            *state = open;
         }
     }
 

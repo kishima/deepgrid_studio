@@ -66,7 +66,11 @@ pub fn spawn_loose_item(
     pos: GridPos,
 ) {
     let base = tile_center(pos);
-    let mut entity = commands.spawn((FloorItem { instance, pos }, Visibility::default()));
+    let mut entity = commands.spawn((
+        FloorItem { instance, pos },
+        Visibility::default(),
+        crate::world::LevelScoped,
+    ));
     if def.model.is_empty() {
         // Generic gem: a small tinted cube tilted to read as a diamond, hovering
         // and spinning so it's legible as a pickup.

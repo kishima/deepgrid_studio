@@ -25,6 +25,16 @@ fn block_name(block: Block) -> &'static str {
         Block::Horoscope { pass_from: Facing::East } => "Horo >E",
         Block::Horoscope { pass_from: Facing::North } => "Horo ^N",
         Block::Horoscope { pass_from: Facing::South } => "Horo vS",
+        Block::Hole => "Hole",
+        Block::Stairs { up: true } => "Stairs Up",
+        Block::Stairs { up: false } => "Stairs Dn",
+        Block::WritableWall => "Writable",
+        Block::HoroscopeVert { from_below: true } => "VertHoro Up",
+        Block::HoroscopeVert { from_below: false } => "VertHoro Dn",
+        Block::Keyhole => "Keyhole",
+        Block::Switch => "Switch",
+        Block::FloorPlate => "Plate",
+        Block::WarpPoint => "Warp",
     }
 }
 
@@ -42,6 +52,14 @@ fn cell_color(block: Block, footing: bool) -> egui::Color32 {
         Block::Door { kind: 0 } => egui::Color32::from_rgb(200, 150, 60),
         Block::Door { .. } => egui::Color32::from_rgb(70, 170, 180),
         Block::Horoscope { .. } => egui::Color32::from_rgb(150, 70, 200),
+        Block::Hole => egui::Color32::from_rgb(10, 10, 14),
+        Block::Stairs { .. } => egui::Color32::from_rgb(150, 120, 70),
+        Block::WritableWall => egui::Color32::from_rgb(110, 100, 90),
+        Block::HoroscopeVert { .. } => egui::Color32::from_rgb(120, 90, 200),
+        Block::Keyhole => egui::Color32::from_rgb(180, 160, 40),
+        Block::Switch => egui::Color32::from_rgb(200, 60, 60),
+        Block::FloorPlate => egui::Color32::from_rgb(120, 130, 150),
+        Block::WarpPoint => egui::Color32::from_rgb(90, 200, 200),
     }
 }
 
@@ -57,6 +75,16 @@ fn cell_glyph(block: Block) -> Option<char> {
             Facing::North => '^',
             Facing::South => 'v',
         }),
+        Block::Hole => Some('o'),
+        Block::Stairs { up: true } => Some('u'),
+        Block::Stairs { up: false } => Some('d'),
+        Block::WritableWall => Some('W'),
+        Block::HoroscopeVert { from_below: true } => Some('A'),
+        Block::HoroscopeVert { from_below: false } => Some('V'),
+        Block::Keyhole => Some('K'),
+        Block::Switch => Some('S'),
+        Block::FloorPlate => Some('P'),
+        Block::WarpPoint => Some('T'),
         _ => None,
     }
 }

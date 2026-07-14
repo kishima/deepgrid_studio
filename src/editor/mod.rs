@@ -33,6 +33,18 @@ pub const PALETTE: &[Block] = &[
     Block::Horoscope { pass_from: Facing::East },
     Block::Horoscope { pass_from: Facing::North },
     Block::Horoscope { pass_from: Facing::South },
+    // plan8 terrain / gimmicks. Event parameters (wall texts, stairs links,
+    // event defs) stay hand-authored in RON until the plan9 editor UI.
+    Block::Hole,
+    Block::Stairs { up: true },
+    Block::Stairs { up: false },
+    Block::WritableWall,
+    Block::HoroscopeVert { from_below: true },
+    Block::HoroscopeVert { from_below: false },
+    Block::Keyhole,
+    Block::Switch,
+    Block::FloorPlate,
+    Block::WarpPoint,
 ];
 
 /// The player's start placement (position + facing), the unit of a start edit.
@@ -335,14 +347,44 @@ impl EditorState {
             return;
         }
 
+        // plan8: warn (don't block) when trigger blocks and their event
+        // definitions don't line up — both directions.
+        let warn = self.trigger_event_mismatch();
+
         let rel = self.level_paths[self.level_index].clone();
         match project::save_level(&self.project_dir, &rel, self.cur()) {
             Ok(()) => {
                 self.dirty[self.level_index] = false;
-                self.status = format!("saved {rel}");
+                self.status = match warn {
+                    Some(w) => format!("saved {rel} — 注意: {w}"),
+                    None => format!("saved {rel}"),
+                };
             }
             Err(e) => self.status = format!("save failed: {e}"),
         }
+    }
+
+    /// A human-readable warning if a trigger block lacks a matching `EventDef`
+    /// (or an event points at a non-trigger cell). `None` when consistent.
+    fn trigger_event_mismatch(&self) -> Option<String> {
+        use crate::dungeon::Block;
+        let lvl = self.cur();
+        let is_trigger = |b: Block| matches!(b, Block::Keyhole | Block::Switch | Block::FloorPlate | Block::WarpPoint);
+        // Trigger blocks without an event at their coordinate.
+        for f in 0..lvl.level.floor_count() {
+            let Some(floor) = lvl.level.floor(f) else { continue };
+            for y in 0..floor.height {
+                for x in 0..floor.width {
+                    let (xi, yi) = (x as i32, y as i32);
+                    if floor.get(xi, yi).is_some_and(is_trigger)
+                        && !lvl.events.iter().any(|e| e.at == (xi, yi, f))
+                    {
+                        return Some(format!("トリガーブロック ({xi},{yi},f{f}) にイベント未設定"));
+                    }
+                }
+            }
+        }
+        None
     }
 }
 
@@ -404,6 +446,10 @@ mod tests {
             },
             items: Vec::new(),
             monsters: Vec::new(),
+            wall_texts: Vec::new(),
+            stairs_links: Vec::new(),
+            events: Vec::new(),
+            open_doors: Vec::new(),
         };
         Project {
             dir: PathBuf::from("/tmp/does-not-exist"),

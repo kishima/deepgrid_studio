@@ -5,7 +5,7 @@
 // sizing, door kinds, character count and party size.
 (
     name: "Sample Dungeon",
-    version: 5,
+    version: 6,
     limits: (
         max_levels: 14,
         floors_per_level: 5,
@@ -24,7 +24,7 @@
         max_event_delay: 63,
         demo_message_lines: 160,
     ),
-    levels: ["levels/level00.ron"],
+    levels: ["levels/level00.ron", "levels/level01.ron"],
     // Registered characters (≤ limits.max_characters) and the active party
     // (≤ limits.party_size, ids referencing characters.ron).
     characters: "characters.ron",

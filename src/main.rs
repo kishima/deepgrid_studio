@@ -13,6 +13,7 @@ mod data_screen;
 mod debug_shot;
 mod dungeon;
 mod editor;
+mod event;
 mod floor_items;
 mod game_state;
 mod hazard;
@@ -27,13 +28,13 @@ mod project;
 mod render;
 mod rng;
 mod rules;
+mod world;
 
 use std::path::PathBuf;
 
 use bevy::prelude::*;
 
 use clock::{CycleTick, GameClock};
-use dungeon::DoorStates;
 use floor_items::{InitialItems, PickupRequest};
 use game_state::{DataScreen, SelectedMember};
 use hud::MessageLog;
@@ -90,7 +91,8 @@ fn main() {
 /// Build and run the play-mode app: load the project's level 0 into the 3D
 /// runtime (plan1/plan2 systems).
 fn run_play(project: Project) {
-    let doors = DoorStates::new(project.limits.door_kinds_per_level);
+    // Doors start closed unless the level's `!`/`@` glyphs mark a kind open (v6).
+    let doors = world::doors_for(&project.levels[0], None, project.limits.door_kinds_per_level);
     let dungeon = project.levels[0].to_dungeon();
     let party = project.build_party();
     let catalog = project.build_catalog();
@@ -98,6 +100,8 @@ fn run_play(project: Project) {
     let magic_catalog = project.build_magic_catalog();
     let initial_items = InitialItems(project.levels[0].items.clone());
     let initial_monsters = InitialMonsters(project.levels[0].monsters.clone());
+    let event_flags = event::EventFlags::new(project.limits.event_flags);
+    let game_levels = world::GameLevels { levels: project.levels.clone() };
 
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -133,11 +137,22 @@ fn run_play(project: Project) {
     .init_resource::<magic::LightBoost>()
     .init_resource::<magic::SelectedMagic>()
     .init_resource::<game_state::DataView>()
+    // plan8: events / gimmicks / multi-level.
+    .insert_resource(event_flags)
+    .insert_resource(game_levels)
+    .init_resource::<event::EventQueue>()
+    .init_resource::<event::TriggerStates>()
+    .init_resource::<event::MoveMode>()
+    .init_resource::<world::CurrentLevel>()
+    .init_resource::<world::LevelStates>()
     .add_event::<PlayerFell>()
     .add_event::<CycleTick>()
     .add_event::<PickupRequest>()
     .add_event::<PlayerAction>()
-    .add_event::<magic::CastMagic>();
+    .add_event::<magic::CastMagic>()
+    .add_event::<event::FrontInteract>()
+    .add_event::<render::TileDirty>()
+    .add_event::<world::LevelTransition>();
     data_screen::init(&mut app);
 
     app.add_systems(
@@ -222,6 +237,31 @@ fn run_play(project: Project) {
             magic::animate_projectiles,
         ),
     )
+    // plan8: events / gimmicks / multi-level. Triggers read this frame's player
+    // position + interact events; run_events drives the queue on cycle ticks;
+    // transitions and mesh rebuilds follow.
+    .add_systems(
+        Update,
+        (
+            event::front_interact.after(player::player_movement),
+            event::entry_triggers.after(player::player_movement),
+            event::debug_gimmick_driver.before(event::entry_triggers),
+            event::run_events
+                .after(event::front_interact)
+                .after(event::entry_triggers)
+                .after(monster::monster_lifecycle),
+            world::level_transition
+                .after(event::run_events)
+                .after(event::entry_triggers),
+            render::rebuild_dirty_tiles
+                .after(event::run_events)
+                .after(world::level_transition),
+            player::snap_camera_on_teleport
+                .after(event::run_events)
+                .after(world::level_transition)
+                .after(player::player_movement),
+        ),
+    )
     .add_systems(
         Update,
         (
@@ -272,6 +312,14 @@ fn run_play(project: Project) {
                     .after(magic::cast_magic)
                     .after(magic::drive_player_light)
                     .after(character::tick_effects),
+            )
+            .add_systems(
+                Update,
+                autotest::run_gimmick
+                    .after(autotest::run_magic)
+                    .after(event::run_events)
+                    .after(world::level_transition)
+                    .after(event::entry_triggers),
             );
     }
 
