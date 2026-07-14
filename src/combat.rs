@@ -55,6 +55,14 @@ pub fn steal_chance(stealing: i32, wariness: i32) -> i32 {
     (50 + stealing - wariness).clamp(5, 95)
 }
 
+/// Per-light-bullet chance (percent) that an attack spell lands, resisted by the
+/// target's 対魔法力: `clamp(100 − anti_magic/10, 5, 100)`. Rolled per bullet
+/// (plan7「攻撃魔法」) so a high-resistance target usually shrugs the spell off.
+/// **Provisional** (project.md「計算システム」); update plan7.md if it changes.
+pub fn magic_hit_rate(anti_magic: i32) -> i32 {
+    (100 - anti_magic / 10).clamp(5, 100)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,5 +107,14 @@ mod tests {
         assert_eq!(throw_range(10_000, 10_000), 6);
         assert_eq!(steal_chance(10_000, 0), 95);
         assert_eq!(steal_chance(0, 10_000), 5);
+    }
+
+    #[test]
+    fn magic_resistance_bounds() {
+        // No resistance → every bullet lands; heavy resistance floors at 5%.
+        assert_eq!(magic_hit_rate(0), 100);
+        assert_eq!(magic_hit_rate(500), 50); // 100 - 50
+        assert_eq!(magic_hit_rate(999), 5); // 100 - 99 = 1 → clamped
+        assert_eq!(magic_hit_rate(100_000), 5);
     }
 }

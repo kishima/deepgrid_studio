@@ -503,7 +503,7 @@ fn chebyshev(a: GridPos, b: GridPos) -> i32 {
 
 /// The cardinal facing that points from `from` most directly toward `to`
 /// (ties prefer the horizontal axis).
-fn facing_toward(from: GridPos, to: GridPos) -> Facing {
+pub(crate) fn facing_toward(from: GridPos, to: GridPos) -> Facing {
     let dx = to.x - from.x;
     let dy = to.y - from.y;
     if dx.abs() >= dy.abs() {
@@ -764,7 +764,7 @@ fn next_actor(party: &Party, rot: &mut AttackRotation) -> Option<usize> {
 }
 
 /// The living monster whose (single-tile) position is `pos`, if any.
-fn monster_at(
+pub(crate) fn monster_at(
     pos: GridPos,
     monsters: &Query<(Entity, &mut Monster)>,
     catalog: &MonsterCatalog,
@@ -907,7 +907,7 @@ fn weapon_stats(member: &crate::character::PartyMember, items: &ItemCatalog) -> 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn kill_monster(
+pub(crate) fn kill_monster(
     commands: &mut Commands,
     mon: &mut Monster,
     def: &MonsterDef,

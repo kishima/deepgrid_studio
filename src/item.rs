@@ -176,6 +176,10 @@ pub struct ItemDef {
     /// glb path for the 3D floor display; empty = generic fallback shape.
     #[serde(default)]
     pub model: String,
+    /// Magic id a Scroll teaches when read (plan7). `#[serde(default)]` so
+    /// non-scroll / pre-plan7 items parse.
+    #[serde(default)]
+    pub teaches: Option<String>,
 }
 
 impl ItemDef {
@@ -191,6 +195,11 @@ pub struct ItemInstance {
     pub def_id: String,
     #[serde(default)]
     pub entropy: i32,
+    /// When `Some(magic_id)`, this (empty-container) instance is a 秘薬 bottle
+    /// holding that spell (plan7). `#[serde(default)]` keeps save/round-trip
+    /// compatibility with pre-plan7 instances.
+    #[serde(default)]
+    pub potion_of: Option<String>,
 }
 
 impl ItemInstance {
@@ -198,6 +207,7 @@ impl ItemInstance {
         Self {
             def_id: def_id.into(),
             entropy: 0,
+            potion_of: None,
         }
     }
 }
@@ -291,6 +301,11 @@ impl Inventory {
 
     pub fn get(&self, r: SlotRef) -> Option<&ItemInstance> {
         self.cell(r).and_then(|c| c.as_ref())
+    }
+
+    /// Mutable access to the instance at `r` (plan7: stamp a potion's `potion_of`).
+    pub fn get_mut(&mut self, r: SlotRef) -> Option<&mut ItemInstance> {
+        self.cell_mut(r).and_then(|c| c.as_mut())
     }
 
     /// Remove and return the item at `r` (if any).
@@ -479,6 +494,7 @@ mod tests {
             equip_slots: vec![],
             effects: vec![],
             model: String::new(),
+            teaches: None,
         }
     }
 

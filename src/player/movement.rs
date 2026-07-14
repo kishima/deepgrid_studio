@@ -197,12 +197,14 @@ pub fn setup_player(mut commands: Commands, dungeon: Res<Dungeon>) {
         .with_children(|parent| {
             parent.spawn((
                 PointLight {
-                    intensity: 120_000.0,
-                    range: 22.0,
+                    intensity: crate::magic::BASE_LIGHT_INTENSITY,
+                    range: crate::magic::BASE_LIGHT_RANGE,
                     shadows_enabled: false,
                     ..default()
                 },
                 Transform::from_xyz(0.0, 0.3, 0.0),
+                // Tagged so the lighting-spell boost (magic.rs) can find it.
+                crate::magic::PlayerLight,
             ));
         });
 
@@ -417,6 +419,8 @@ pub struct ActionEvents<'w> {
     combat: EventWriter<'w, crate::monster::PlayerAction>,
     /// Movement command buffered by a move-icon click (hud.rs).
     icon_move: ResMut<'w, crate::hud::IconMove>,
+    /// Which data-screen tab to show (plan7): the M key jumps to the magic tab.
+    data_view: ResMut<'w, crate::game_state::DataView>,
 }
 
 /// Drive input, animation, and the camera transform each frame.
@@ -485,6 +489,12 @@ pub fn player_movement(
     if !script.active {
         if keys.just_pressed(KeyCode::Tab) || keys.just_pressed(KeyCode::KeyI) {
             data.open = !data.open;
+        }
+        // M jumps straight to the magic tab (plan7): open the data screen if
+        // needed and switch its view to magic.
+        if keys.just_pressed(KeyCode::KeyM) {
+            data.open = true;
+            events.data_view.magic = true;
         }
         if !data.open {
             if keys.just_pressed(KeyCode::Space) {

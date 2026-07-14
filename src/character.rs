@@ -39,6 +39,29 @@ pub enum StatKind {
     Bite,
 }
 
+impl StatKind {
+    /// Short Japanese label (magic messages, the data-screen detail).
+    pub fn label(self) -> &'static str {
+        match self {
+            StatKind::MaxHp => "最大HP",
+            StatKind::MaxMp => "最大MP",
+            StatKind::Attack => "こうげき",
+            StatKind::Defense => "ぼうぎょ",
+            StatKind::Agility => "すばやさ",
+            StatKind::Throwing => "とおなげ",
+            StatKind::Carrying => "うんぱん",
+            StatKind::LungCapacity => "はいかつりょう",
+            StatKind::HeatResist => "たいねつ",
+            StatKind::PoisonResist => "たいどく",
+            StatKind::MagicKnowledge => "まほうちしき",
+            StatKind::Concentration => "しゅうちゅう",
+            StatKind::Appraisal => "かんてい",
+            StatKind::Stealing => "ぬすみ",
+            StatKind::Bite => "はのつよさ",
+        }
+    }
+}
+
 /// Ability values (project.md「キャラクターの仕様」+ dandan_spec_things_editor.md).
 ///
 /// plan4 only actually reads `max_hp` / `max_mp` / `concentration`, but the whole
@@ -207,6 +230,10 @@ pub struct Character {
     /// pre-plan5 `characters.ron` still parses.
     #[serde(default)]
     pub items: Vec<String>,
+    /// Initially-known magic ids (plan7). Poured into `CharacterState.learned` at
+    /// party build (mirrors `items`). `#[serde(default)]` so pre-plan7 data parses.
+    #[serde(default)]
+    pub magics: Vec<String>,
 }
 
 /// A stat change currently in force from an *eaten* item. Equipment effects are
@@ -218,6 +245,10 @@ pub struct ActiveEffect {
     pub delta: i32,
     /// Cycles left, or `None` for a permanent effect (duration 0).
     pub remaining: Option<u64>,
+    /// The magic id that applied this effect (plan7), or `None` for eaten-item
+    /// effects. Recasting the same magic replaces (resets) its effect rather than
+    /// stacking, keyed on this.
+    pub source: Option<String>,
 }
 
 /// Mutable per-play state, split from the immutable `Character` definition. This
@@ -242,6 +273,9 @@ pub struct CharacterState {
     pub guarding: bool,
     /// 精神統一: concentration recovers 5× until acting / being hit (plan6).
     pub concentrating: bool,
+    /// Known magic ids (plan7). Seeded from `Character.magics` at party build and
+    /// grown by reading teaching scrolls. A save target (plan10).
+    pub learned: Vec<String>,
 }
 
 impl CharacterState {
@@ -259,6 +293,7 @@ impl CharacterState {
             exp: 0,
             guarding: false,
             concentrating: false,
+            learned: Vec::new(),
         }
     }
 }
@@ -318,6 +353,7 @@ impl PartyMember {
                 } else {
                     Some(e.duration_cycles)
                 },
+                source: None,
             });
         }
         if self.state.hp == 0 {
@@ -504,6 +540,7 @@ mod tests {
             model: "".into(),
             portrait: "".into(),
             items: vec![],
+            magics: vec![],
         };
         let state = CharacterState::full(&ch);
         PartyMember { character: ch, state, inventory: Inventory::new(3, 3) }
@@ -582,6 +619,7 @@ mod tests {
             model: "models/party/knight.glb".into(),
             portrait: "".into(),
             items: Vec::new(),
+            magics: Vec::new(),
         };
         let st = CharacterState::full(&ch);
         assert_eq!((st.hp, st.mp, st.concentration, st.down), (100, 30, 40, false));

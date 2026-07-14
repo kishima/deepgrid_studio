@@ -24,6 +24,14 @@ fn scene_script(value: &str) -> VecDeque<Command> {
         "door" => vec![Move(TurnRight), Move(TurnRight), ToggleDoor],
         // Turn South to face the sentinel monster (skel_guard) + floor items.
         "monster" => vec![Move(TurnRight)],
+        // Turn South to face the sentinel, then cast an attack spell at it
+        // (the actual cast is fired by magic::debug_magic_driver once settled).
+        "magic" => vec![Move(TurnRight)],
+        // Cast a lighting spell in place (driver handles the cast); the scene
+        // just needs the world to settle, so no movement.
+        "light" => vec![],
+        // Brew a potion and open the data screen (driver handles it).
+        "potion" => vec![],
         // Step up to the sentinel and attack it (shows a combat message).
         "combat" => vec![Move(TurnRight), Move(Forward), Attack],
         // Turn South to face the floor items (sword, chest, barrel, glow stone).

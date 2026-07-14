@@ -1156,15 +1156,352 @@ pub fn run_hunger(
                     if no_heal {
                         screen.open = false;
                         resting.active = false;
-                        println!("[autotest] PASS hunger-rest: no healing while starving");
-                        println!("[autotest] ALL PASS (26 steps)");
-                        exit.send(AppExit::Success);
+                        // Hand off to the magic steps (run_magic, step ≥ 27).
+                        t.next_step("hunger-rest: no healing while starving");
                     } else {
                         fail(&t, "hunger-rest", "飢餓中の休息でHPが回復した".into(), &mut exit);
                     }
                 }
             }
         },
+
+        _ => {}
+    }
+}
+
+// ==================================================================== magic steps
+
+use crate::magic::{
+    BASE_LIGHT_INTENSITY, CastMagic, CastTarget, LightBoost, MagicCatalog, PlayerLight,
+};
+
+/// Steps 27–33 (plan7): scroll learning, buff/attack/revive casting, the MP gate,
+/// the lighting boost, and the potion round-trip. Runs once `run_hunger` advances
+/// `step` past 26. Casting is driven through the real `CastMagic` event, and the
+/// non-combat helpers (`learn_scroll` / `liquefy` / `drink_potion`) are exercised
+/// directly — the same functions the data-screen UI calls.
+#[allow(clippy::too_many_arguments)]
+pub fn run_magic(
+    mut t: ResMut<AutoTest>,
+    mut commands: Commands,
+    mut party: ResMut<Party>,
+    item_catalog: Res<ItemCatalog>,
+    magic_catalog: Res<MagicCatalog>,
+    rules: Res<RulesConfig>,
+    clock: Res<GameClock>,
+    log: Res<MessageLog>,
+    player: Res<Player>,
+    mut cast_ev: EventWriter<CastMagic>,
+    mut boost: ResMut<LightBoost>,
+    lights: Query<&PointLight, With<PlayerLight>>,
+    monsters: Query<(Entity, &Monster)>,
+    mut exit: EventWriter<AppExit>,
+) {
+    if t.step < 27 || t.fatal.is_some() {
+        return;
+    }
+    let fail = |t: &AutoTest, name: &str, why: String, exit: &mut EventWriter<AppExit>| {
+        eprintln!("[autotest] FAIL {name}: {why}");
+        eprintln!("[autotest] {} step(s) passed before the failure", t.step);
+        exit.send(AppExit::error());
+    };
+    let learns = |m: &crate::character::PartyMember, id: &str| m.state.learned.iter().any(|l| l == id);
+    let ensure_learned = |m: &mut crate::character::PartyMember, id: &str| {
+        if !m.state.learned.iter().any(|l| l == id) {
+            m.state.learned.push(id.to_string());
+        }
+    };
+
+    match t.step {
+        // ---- 27: reading a scroll teaches a known spell (or fails, kept) -----
+        27 => {
+            use crate::item::{ItemInstance, SlotRef};
+            let scroll_heal = item_catalog.get("scroll_heal").cloned();
+            let scroll_fire = item_catalog.get("scroll_fire").cloned();
+            let (Some(scroll_heal), Some(scroll_fire)) = (scroll_heal, scroll_fire) else {
+                fail(&t, "learn-scroll", "巻物アイテムが定義されていない".into(), &mut exit);
+                return;
+            };
+            // Pick a caster who does NOT yet know `heal` (learns it) and one whose
+            // magic knowledge is below firebolt's difficulty (fails).
+            let learner = party.members.iter().position(|m| !learns(m, "heal"));
+            let weak = party
+                .members
+                .iter()
+                .position(|m| m.effective_stats(&item_catalog).get(StatKind::MagicKnowledge) < 20);
+            let (Some(li), Some(wi)) = (learner, weak) else {
+                fail(&t, "learn-scroll", "適切な学習者/知識不足キャラがいない".into(), &mut exit);
+                return;
+            };
+
+            // Success path: scroll in hand → learn → consume.
+            let ok;
+            let learned_now;
+            let scroll_gone;
+            {
+                let m = &mut party.members[li];
+                let slot = m.inventory.pickup(ItemInstance::new("scroll_heal")).unwrap_or(SlotRef::Hand(0));
+                match crate::magic::learn_scroll(m, &scroll_heal, &magic_catalog, &item_catalog) {
+                    Ok(_) => {
+                        m.inventory.take(slot);
+                        ok = true;
+                    }
+                    Err(_) => ok = false,
+                }
+                learned_now = learns(m, "heal");
+                scroll_gone = !m.inventory.iter().any(|(_, it)| it.def_id == "scroll_heal");
+            }
+            // Failure path: knowledge too low → error, scroll stays, no learn.
+            let fail_kept;
+            let no_learn;
+            {
+                let m = &mut party.members[wi];
+                let slot = m.inventory.pickup(ItemInstance::new("scroll_fire")).unwrap_or(SlotRef::Hand(0));
+                let res = crate::magic::learn_scroll(m, &scroll_fire, &magic_catalog, &item_catalog);
+                if res.is_ok() {
+                    m.inventory.take(slot);
+                }
+                fail_kept = res.is_err() && m.inventory.iter().any(|(_, it)| it.def_id == "scroll_fire");
+                no_learn = !learns(m, "firebolt");
+            }
+            if ok && learned_now && scroll_gone && fail_kept && no_learn {
+                t.next_step("learn-scroll: success learns+consumes, low-knowledge fails+keeps");
+            } else {
+                fail(&t, "learn-scroll",
+                    format!("ok={ok} learned={learned_now} gone={scroll_gone} kept={fail_kept} no_learn={no_learn}"),
+                    &mut exit);
+            }
+        }
+
+        // ---- 28: a buff spell raises the stat, then wears off -----------------
+        28 => match t.phase {
+            0 => {
+                let mage = party.members.iter().position(|m| learns(m, "firebolt")).unwrap_or(1);
+                t.saved_pos = None;
+                t.monster_ent = None;
+                {
+                    let m = &mut party.members[mage];
+                    ensure_learned(m, "shield");
+                    m.state.mp = 60;
+                }
+                t.baseline = party.members[mage].effective_stats(&item_catalog).get(StatKind::Defense);
+                t.hp_before = vec![party.members[mage].state.mp, mage as i32];
+                cast_ev.send(CastMagic { caster: mage, magic_id: "shield".into(), target: CastTarget::Member(mage) });
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                let mage = t.hp_before[1] as usize;
+                let mp_now = party.members[mage].state.mp;
+                let def_now = party.members[mage].effective_stats(&item_catalog).get(StatKind::Defense);
+                if mp_now < t.hp_before[0] && def_now == t.baseline + 10 {
+                    for e in &mut party.members[mage].state.effects {
+                        if e.source.as_deref() == Some("shield") {
+                            e.remaining = Some(1);
+                        }
+                    }
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 2;
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "cast-buff", format!("mp {} def {def_now} (base {})", mp_now, t.baseline), &mut exit);
+                }
+            }
+            _ => {
+                let mage = t.hp_before[1] as usize;
+                let def_now = party.members[mage].effective_stats(&item_catalog).get(StatKind::Defense);
+                if def_now == t.baseline {
+                    t.next_step("cast-buff: MP spent, defence up, then expires");
+                } else if clock.cycle >= t.mark_cycle + 6 {
+                    fail(&t, "cast-buff", format!("持続切れ後も def {def_now} ≠ {}", t.baseline), &mut exit);
+                }
+            }
+        },
+
+        // ---- 29: attack magic damages a monster; a warded one resists --------
+        29 => match t.phase {
+            0 => {
+                let mage = party.members.iter().position(|m| learns(m, "firebolt")).unwrap_or(1);
+                party.members[mage].state.mp = 60;
+                t.saved_pos = Some(GridPos::new(mage as i32, 0, 0)); // stash mage index in .x
+                // skel_guard: immobile, never attacks, 0 anti-magic → full damage.
+                let (e, _) = spawn_subject(&mut commands, &player, "skel_guard", 999);
+                t.monster_ent = Some(e);
+                cast_ev.send(CastMagic { caster: mage, magic_id: "firebolt".into(), target: CastTarget::FrontEnemy });
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                let e = t.monster_ent.unwrap();
+                let hp = monsters.get(e).map(|(_, m)| m.hp).unwrap_or(999);
+                if hp < 999 {
+                    t.baseline = 999 - hp; // damage against a 0-resist target
+                    commands.entity(e).despawn();
+                    let mage = t.saved_pos.unwrap().x as usize;
+                    party.members[mage].state.mp = 60;
+                    let (e2, _) = spawn_subject(&mut commands, &player, "skel_warded", 999);
+                    t.monster_ent = Some(e2);
+                    cast_ev.send(CastMagic { caster: mage, magic_id: "firebolt".into(), target: CastTarget::FrontEnemy });
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 2;
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "cast-attack", "通常個体にダメージが入らない".into(), &mut exit);
+                }
+            }
+            _ => {
+                // Give the warded cast a few cycles to resolve, then compare.
+                if clock.cycle >= t.mark_cycle + 4 {
+                    let e = t.monster_ent.unwrap();
+                    let hp = monsters.get(e).map(|(_, m)| m.hp).unwrap_or(999);
+                    let dmg_b = 999 - hp;
+                    if dmg_b < t.baseline {
+                        commands.entity(e).despawn();
+                        t.next_step("cast-attack: normal takes damage, warded resists");
+                    } else {
+                        fail(&t, "cast-attack", format!("warded dmg {dmg_b} ≥ normal dmg {}", t.baseline), &mut exit);
+                    }
+                }
+            }
+        },
+
+        // ---- 30: reviving a downed member restores HP ------------------------
+        30 => match t.phase {
+            0 => {
+                let healer = party.members.iter().position(|m| learns(m, "revive50"));
+                let Some(healer) = healer else {
+                    fail(&t, "cast-revive", "revive を覚えたキャラがいない".into(), &mut exit);
+                    return;
+                };
+                let victim = (0..party.members.len()).find(|&i| i != healer).unwrap_or(0);
+                party.members[healer].state.mp = 60;
+                party.members[victim].state.hp = 0;
+                party.members[victim].state.down = true;
+                t.baseline = victim as i32;
+                cast_ev.send(CastMagic { caster: healer, magic_id: "revive50".into(), target: CastTarget::DownedAuto });
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            _ => {
+                let victim = t.baseline as usize;
+                let m = &party.members[victim];
+                if !m.state.down {
+                    let max_hp = m.effective_stats(&item_catalog).get(StatKind::MaxHp).max(1);
+                    let expected = (max_hp * 50 / 100).clamp(1, max_hp);
+                    if m.state.hp == expected {
+                        t.next_step("cast-revive: downed member back at 50% HP");
+                    } else {
+                        fail(&t, "cast-revive", format!("hp {} ≠ {expected}", m.state.hp), &mut exit);
+                    }
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "cast-revive", "気絶が解除されない".into(), &mut exit);
+                }
+            }
+        },
+
+        // ---- 31: casting with no MP is refused (no effect, no MP change) -----
+        31 => match t.phase {
+            0 => {
+                let mage = party.members.iter().position(|m| learns(m, "firebolt")).unwrap_or(1);
+                {
+                    let m = &mut party.members[mage];
+                    ensure_learned(m, "shield");
+                    m.state.mp = 0;
+                }
+                t.baseline = party.members[mage].effective_stats(&item_catalog).get(StatKind::Defense);
+                t.hp_before = vec![0, mage as i32];
+                cast_ev.send(CastMagic { caster: mage, magic_id: "shield".into(), target: CastTarget::Member(mage) });
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            _ => {
+                if clock.cycle >= t.mark_cycle + 3 {
+                    let mage = t.hp_before[1] as usize;
+                    let mp_now = party.members[mage].state.mp;
+                    let def_now = party.members[mage].effective_stats(&item_catalog).get(StatKind::Defense);
+                    let refused = log.contains("たりない");
+                    if mp_now == 0 && def_now == t.baseline && refused {
+                        t.next_step("mp-gate: no-MP cast refused, nothing changes");
+                    } else {
+                        fail(&t, "mp-gate", format!("mp {mp_now} def {def_now} refused={refused}"), &mut exit);
+                    }
+                }
+            }
+        },
+
+        // ---- 32: a lighting spell boosts the player light, then fades --------
+        32 => match t.phase {
+            0 => {
+                let mage = party.members.iter().position(|m| learns(m, "light2")).unwrap_or(1);
+                party.members[mage].state.mp = 60;
+                cast_ev.send(CastMagic { caster: mage, magic_id: "light2".into(), target: CastTarget::Caster });
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                let intensity = lights.get_single().map(|l| l.intensity).unwrap_or(0.0);
+                let want = BASE_LIGHT_INTENSITY * 2.5;
+                if (boost.multiplier - 2.5).abs() < 0.01 && (intensity - want).abs() < 1.0 {
+                    boost.remaining = 1; // force a quick expiry for the test
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 2;
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "light", format!("mult {} intensity {intensity} (want {want})", boost.multiplier), &mut exit);
+                }
+            }
+            _ => {
+                if clock.cycle >= t.mark_cycle + 3 {
+                    let intensity = lights.get_single().map(|l| l.intensity).unwrap_or(0.0);
+                    if (boost.multiplier - 1.0).abs() < 0.01 && (intensity - BASE_LIGHT_INTENSITY).abs() < 1.0 {
+                        t.next_step("light: intensity boosts ×2.5 then returns to base");
+                    } else {
+                        fail(&t, "light", format!("expiry mult {} intensity {intensity}", boost.multiplier), &mut exit);
+                    }
+                }
+            }
+        },
+
+        // ---- 33: liquefy a spell, then drink it ------------------------------
+        33 => {
+            use crate::item::ItemInstance;
+            let brewer = party.members.iter().position(|m| learns(m, "heal"));
+            let Some(bi) = brewer else {
+                fail(&t, "potion", "heal を覚えたキャラがいない".into(), &mut exit);
+                return;
+            };
+            let heal_def = magic_catalog.get("heal").cloned().unwrap();
+            let m = &mut party.members[bi];
+            m.state.mp = 40;
+            let _ = m.inventory.pickup(ItemInstance::new("bottle_empty"));
+            let mp_before = m.state.mp;
+            let liq = crate::magic::liquefy(m, &heal_def, &item_catalog);
+            let potion_slot = m
+                .inventory
+                .iter()
+                .find(|(_, it)| it.potion_of.as_deref() == Some("heal"))
+                .map(|(s, _)| s);
+            let mp_after_liq = m.state.mp;
+            let max_hp = m.effective_stats(&item_catalog).get(StatKind::MaxHp);
+            m.state.hp = (max_hp / 2).max(1);
+            let hp_before = m.state.hp;
+            let drink_ok = match potion_slot {
+                Some(s) => crate::magic::drink_potion(m, s, &magic_catalog, &item_catalog, &rules.hunger).is_ok(),
+                None => false,
+            };
+            let hp_after = m.state.hp;
+            let reverted = potion_slot
+                .and_then(|s| m.inventory.get(s))
+                .map(|it| it.potion_of.is_none())
+                .unwrap_or(false);
+            if liq.is_ok() && potion_slot.is_some() && mp_after_liq < mp_before && drink_ok && hp_after > hp_before && reverted {
+                println!("[autotest] PASS potion: liquefy → drink heals → bottle empties");
+                println!("[autotest] ALL PASS (33 steps)");
+                exit.send(AppExit::Success);
+            } else {
+                fail(&t, "potion",
+                    format!("liq={} slot={} mp {}→{} drink={drink_ok} hp {hp_before}→{hp_after} reverted={reverted}",
+                        liq.is_ok(), potion_slot.is_some(), mp_before, mp_after_liq),
+                    &mut exit);
+            }
+        }
 
         _ => {}
     }

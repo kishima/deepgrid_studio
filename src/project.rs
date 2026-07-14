@@ -21,6 +21,7 @@ use crate::config::LimitsConfig;
 use crate::dungeon::level::{Floor, Level};
 use crate::dungeon::{Block, Dungeon, Facing, GridPos};
 use crate::item::{Inventory, ItemCatalog, ItemDef, ItemInstance, ItemPlacement};
+use crate::magic::{MagicCatalog, MagicDef};
 use crate::monster::{MonsterCatalog, MonsterDef, MonsterPlacement};
 use crate::rules::RulesConfig;
 
@@ -50,6 +51,9 @@ struct ProjectMeta {
     /// Monster-definitions file, project-relative (v4+). Empty = no monsters.
     #[serde(default)]
     monsters: String,
+    /// Magic-definitions file, project-relative (v5+). Empty = no magic.
+    #[serde(default)]
+    magics: String,
     /// Per-project game rules (plan6.5). `#[serde(default)]` so pre-plan6.5
     /// projects (no `rules` block) load with everything at its default.
     #[serde(default)]
@@ -120,8 +124,8 @@ impl LevelData {
 }
 
 /// Project-format version this build writes. Older versions are still accepted
-/// on load (v1: no characters; v2: no items; v3: no monsters).
-pub const PROJECT_VERSION: u32 = 4;
+/// on load (v1: no characters; v2: no items; v3: no monsters; v4: no magic).
+pub const PROJECT_VERSION: u32 = 5;
 
 /// A loaded project: metadata, limits, levels, registered characters + party
 /// roster (v2+), and item definitions (v3+).
@@ -139,6 +143,8 @@ pub struct Project {
     pub items: Vec<ItemDef>,
     /// All monster definitions (empty for a pre-v4 project).
     pub monsters: Vec<MonsterDef>,
+    /// All magic definitions (empty for a pre-v5 project).
+    pub magics: Vec<MagicDef>,
     /// Per-project game rules (defaults for a pre-plan6.5 project).
     pub rules: RulesConfig,
 }
@@ -152,6 +158,11 @@ impl Project {
     /// Build the monster catalog from the loaded definitions.
     pub fn build_monster_catalog(&self) -> MonsterCatalog {
         MonsterCatalog::from_defs(self.monsters.clone(), "monsters").unwrap_or_default()
+    }
+
+    /// Build the magic catalog from the loaded definitions (ids already unique).
+    pub fn build_magic_catalog(&self) -> MagicCatalog {
+        MagicCatalog::from_defs(self.magics.clone(), "magics").unwrap_or_default()
     }
 
     /// Build the runtime [`Party`] resource: resolve each roster id to its
@@ -189,6 +200,8 @@ impl Project {
                 }
                 let mut state = CharacterState::full(character);
                 state.satiety = self.rules.hunger.satiety_max;
+                // Seed initially-known magic (plan7), mirroring starting items.
+                state.learned = character.magics.clone();
                 PartyMember {
                     character: character.clone(),
                     state,
@@ -235,6 +248,22 @@ fn monsters_from_ron(
     }
     MonsterCatalog::from_defs(monsters.clone(), what)?;
     Ok(monsters)
+}
+
+/// Parse and validate a `magics.ron` (a `Vec<MagicDef>`) against `limits`:
+/// count ≤ `max_magic_kinds`, ids unique (checked at catalog build).
+fn magics_from_ron(text: &str, limits: &LimitsConfig, what: &str) -> Result<Vec<MagicDef>, String> {
+    let magics: Vec<MagicDef> =
+        ron::from_str(text).map_err(|e| format!("failed to parse {what}: {e}"))?;
+    if magics.len() > limits.max_magic_kinds {
+        return Err(format!(
+            "{what} has {} magic kinds, exceeds max_magic_kinds {}",
+            magics.len(),
+            limits.max_magic_kinds
+        ));
+    }
+    MagicCatalog::from_defs(magics.clone(), what)?;
+    Ok(magics)
 }
 
 /// Parse and validate a `characters.ron` (a `Vec<Character>`) against `limits`:
@@ -567,9 +596,20 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
         monsters_from_ron(&text, &meta.limits, &meta.monsters)?
     };
 
+    // Magics (v5). Pre-v5 projects load with no magic.
+    let magics = if meta.magics.is_empty() {
+        Vec::new()
+    } else {
+        let path = dir.join(&meta.magics);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        magics_from_ron(&text, &meta.limits, &meta.magics)?
+    };
+
     // Cross-check placements + starting items reference known item ids.
     let known = |id: &str| items.iter().any(|d| d.id == id);
     let known_monster = |id: &str| monsters.iter().any(|d| d.id == id);
+    let known_magic = |id: &str| magics.iter().any(|d| d.id == id);
     for (rel, level) in meta.levels.iter().zip(&levels) {
         for p in &level.items {
             if !known(&p.id) {
@@ -594,6 +634,25 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
                 ));
             }
         }
+        for id in &c.magics {
+            if !known_magic(id) {
+                return Err(format!(
+                    "character '{}' starting magic '{id}' is not defined in {}",
+                    c.id, meta.magics
+                ));
+            }
+        }
+    }
+    // Scroll `teaches` must reference a defined magic.
+    for d in &items {
+        if let Some(id) = &d.teaches
+            && !known_magic(id)
+        {
+            return Err(format!(
+                "item '{}' teaches magic '{id}' not defined in {}",
+                d.id, meta.magics
+            ));
+        }
     }
     for def in &monsters {
         for id in def.carry_items.iter().chain(&def.attack_items) {
@@ -616,6 +675,7 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
         party: meta.party,
         items,
         monsters,
+        magics,
         rules: meta.rules,
     })
 }
@@ -716,6 +776,7 @@ mod tests {
             background: "戦士。\n二行目。".into(),
             growth: GrowthType::Average,
             items: Vec::new(),
+            magics: Vec::new(),
             stats: Stats {
                 level: 3,
                 max_hp: 120,
@@ -844,6 +905,7 @@ mod tests {
             party: vec!["knight".into()],
             items: vec![],
             monsters: vec![],
+            magics: vec![],
             rules: RulesConfig::default(),
         };
         let party = project.build_party();

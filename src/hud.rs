@@ -133,6 +133,10 @@ pub struct ActionIcon(crate::monster::PlayerAction);
 #[derive(Component)]
 pub struct MoveIcon(crate::player::Command);
 
+/// The 魔法 action icon (plan7): opens the data screen on the magic tab.
+#[derive(Component)]
+pub struct MagicButton;
+
 /// One-slot buffer for a movement command issued by a move-icon click. Consumed
 /// by `player_movement` (folded into its `ActionEvents` param).
 #[derive(Resource, Default)]
@@ -146,6 +150,20 @@ pub fn action_icon_clicks(
     for (interaction, icon) in &icons {
         if *interaction == Interaction::Pressed {
             actions.send(icon.0);
+        }
+    }
+}
+
+/// Open the magic tab from the 魔法 icon.
+pub fn magic_button_clicks(
+    icons: Query<&Interaction, (Changed<Interaction>, With<MagicButton>)>,
+    mut data: ResMut<crate::game_state::DataScreen>,
+    mut view: ResMut<crate::game_state::DataView>,
+) {
+    for interaction in &icons {
+        if *interaction == Interaction::Pressed {
+            data.open = true;
+            view.magic = true;
         }
     }
 }
@@ -296,6 +314,26 @@ pub fn setup_hud(
                     }
                 });
             }
+            // 魔法 icon (plan7): a wide button below the 2×3 action grid.
+            col.spawn((
+                Button,
+                Node {
+                    width: Val::Px(ACTION_BTN_W * 3.0 + ICON_GAP * 2.0),
+                    height: Val::Px(ICON_BTN_H),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.26, 0.22, 0.34)),
+                MagicButton,
+            ))
+            .with_children(|b| {
+                b.spawn((
+                    Text::new("魔法"),
+                    TextFont { font: bold.clone(), font_size: ICON_FONT, ..default() },
+                    TextColor(Color::srgb(0.9, 0.8, 1.0)),
+                ));
+            });
         });
 
     // Move-icon window: bottom-left, above the message window (auxiliary

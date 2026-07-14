@@ -50,6 +50,17 @@
         model: "models/enemies/skeleton_minion.glb",
         anim: (idle: "Idle", walk: "Walking_A", attack: "1H_Melee_Attack_Slice_Diagonal", hit: "Hit_A", death: "Death_A"),
     ),
+    // High anti-magic dummy for the attack-magic autotest (対魔法力999); defined
+    // for testing only, not placed in any level.
+    (
+        id: "skel_warded",
+        name: "呪符の骸骨",
+        max_hp: 40, attack: 6, defense: 4, agility: 8, anti_magic: 999,
+        move_type: None, action_unit: 255, attack_freq: 255, sight: 0,
+        exp: 5,
+        model: "models/enemies/skeleton_minion.glb",
+        anim: (idle: "Idle", walk: "Walking_A", attack: "1H_Melee_Attack_Slice_Diagonal", hit: "Hit_A", death: "Death_A"),
+    ),
     // Ranged caster (defined for completeness; not placed in the sample level).
     (
         id: "skel_mage",

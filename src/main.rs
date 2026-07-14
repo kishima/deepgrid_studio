@@ -19,6 +19,7 @@ mod hazard;
 mod hud;
 mod hunger;
 mod item;
+mod magic;
 mod monster;
 mod player;
 mod portrait;
@@ -94,6 +95,7 @@ fn run_play(project: Project) {
     let party = project.build_party();
     let catalog = project.build_catalog();
     let monster_catalog = project.build_monster_catalog();
+    let magic_catalog = project.build_magic_catalog();
     let initial_items = InitialItems(project.levels[0].items.clone());
     let initial_monsters = InitialMonsters(project.levels[0].monsters.clone());
 
@@ -113,6 +115,7 @@ fn run_play(project: Project) {
     .insert_resource(party)
     .insert_resource(catalog)
     .insert_resource(monster_catalog)
+    .insert_resource(magic_catalog)
     .insert_resource(project.rules.clone())
     .insert_resource(initial_items)
     .insert_resource(initial_monsters)
@@ -127,10 +130,14 @@ fn run_play(project: Project) {
     .init_resource::<monster::EnemyNear>()
     .init_resource::<hud::IconMove>()
     .init_resource::<GameRng>()
+    .init_resource::<magic::LightBoost>()
+    .init_resource::<magic::SelectedMagic>()
+    .init_resource::<game_state::DataView>()
     .add_event::<PlayerFell>()
     .add_event::<CycleTick>()
     .add_event::<PickupRequest>()
-    .add_event::<PlayerAction>();
+    .add_event::<PlayerAction>()
+    .add_event::<magic::CastMagic>();
     data_screen::init(&mut app);
 
     app.add_systems(
@@ -194,9 +201,25 @@ fn run_play(project: Project) {
             floor_items::handle_pickup.after(player::player_movement),
             monster::player_actions.after(player::player_movement),
             data_screen::data_screen_interactions,
+            data_screen::data_magic_interactions.after(data_screen::data_screen_interactions),
             floor_items::handle_place.after(data_screen::data_screen_interactions),
             data_screen::toggle_data_screen,
             data_screen::refresh_data_screen.after(data_screen::toggle_data_screen),
+            data_screen::refresh_magic_screen.after(data_screen::toggle_data_screen),
+        ),
+    )
+    // Magic runtime (plan7): drive casts requested by the magic tab / M key /
+    // debug driver, animate light-bullets, and decay the lighting boost.
+    .add_systems(
+        Update,
+        (
+            magic::debug_magic_driver,
+            magic::cast_magic
+                .after(magic::debug_magic_driver)
+                .after(data_screen::data_magic_interactions)
+                .after(monster::player_actions),
+            magic::drive_player_light.after(magic::cast_magic),
+            magic::animate_projectiles,
         ),
     )
     .add_systems(
@@ -207,6 +230,7 @@ fn run_play(project: Project) {
             hud::update_messages,
             hud::action_icon_clicks,
             hud::move_icon_clicks,
+            hud::magic_button_clicks,
             portrait::freeze_portraits,
         ),
     );
@@ -240,6 +264,14 @@ fn run_play(project: Project) {
                     .after(hunger::hunger_tick)
                     .after(clock::recover_concentration)
                     .after(data_screen::rest_tick),
+            )
+            .add_systems(
+                Update,
+                autotest::run_magic
+                    .after(autotest::run_hunger)
+                    .after(magic::cast_magic)
+                    .after(magic::drive_player_light)
+                    .after(character::tick_effects),
             );
     }
 

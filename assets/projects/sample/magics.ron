@@ -1,0 +1,61 @@
+// DeepGrid Studio sample — magic definitions (plan7). A `Vec<MagicDef>` read
+// through src/project.rs (magic.rs::MagicDef). Only non-default fields are
+// written; the rest fall back via #[serde(default)].
+//
+// `value` is the change amount (attack spells use |value|; negative = harmful).
+// `difficulty` is the 魔法知識 needed to learn / cast. `duration_cycles` 0 =
+// permanent/instant. Number ranges follow the original as reference values only.
+//
+// Data rule: Light/Revive must NOT be `liquefiable: true` (the loader warns and
+// the cast refuses potions of them).
+[
+    // Healing — liquefiable, so it can be brewed into a 秘薬.
+    (
+        id: "heal", name: "ヒール", symbol: "回",
+        description: "きずついた 味方の HPを かいふくする。",
+        mp_cost: 6, difficulty: 3, kind: HpChange, value: 30, liquefiable: true,
+    ),
+    // Attack spell: two light-bullets fly at the enemy ahead (value is the per-
+    // bullet damage as |value|; the sign marks it as harmful).
+    (
+        id: "firebolt", name: "ファイアボルト", symbol: "火",
+        description: "光弾を はなち 正面の 敵を やく。",
+        mp_cost: 8, difficulty: 20, kind: HpChange, value: -25, projectiles: 2,
+    ),
+    // Defensive buff (lasts a while).
+    (
+        id: "shield", name: "シールド", symbol: "盾",
+        description: "味方の ぼうぎょを たかめる。",
+        mp_cost: 5, difficulty: 8, kind: StatChange(Defense), value: 10, duration_cycles: 300,
+    ),
+    // Agility buff.
+    (
+        id: "haste", name: "ヘイスト", symbol: "速",
+        description: "味方の すばやさを あげる。",
+        mp_cost: 6, difficulty: 10, kind: StatChange(Agility), value: 15, duration_cycles: 300,
+    ),
+    // Mana restore.
+    (
+        id: "mind", name: "マインド", symbol: "心",
+        description: "味方の MPを 回復する。",
+        mp_cost: 4, difficulty: 12, kind: MpChange, value: 20,
+    ),
+    // Resurrect a downed member to half HP.
+    (
+        id: "revive50", name: "リザレク", symbol: "生",
+        description: "たおれた 仲間を 半分の HPで よみがえらせる。",
+        mp_cost: 20, difficulty: 18, kind: Revive(ratio_percent: 50),
+    ),
+    // Medium lighting spell.
+    (
+        id: "light2", name: "ランタン", symbol: "灯",
+        description: "あたりを しばらく 明るく てらす。",
+        mp_cost: 5, difficulty: 6, kind: Light(strength: 2), duration_cycles: 600,
+    ),
+    // Poison — liquefiable, meant for throwing (投擲毒).
+    (
+        id: "venom", name: "ベノム", symbol: "毒",
+        description: "対象の たいどくを さげる 毒の 秘薬にできる。",
+        mp_cost: 5, difficulty: 8, kind: StatChange(PoisonResist), value: -50, liquefiable: true,
+    ),
+]

@@ -33,6 +33,13 @@
     (id: "bread", name: "パン", kind: General, hardness: 3, weight: 1, nutrition: 25, temperature: 20),
     (id: "water_bottle", name: "みずのビン", kind: Liquid, hardness: 0, weight: 1, nutrition: 5, temperature: 10),
 
+    // --- scrolls (plan7): read from the data screen to learn the taught magic ---
+    (id: "scroll_heal", name: "ヒールの巻物", kind: Scroll, weight: 1, teaches: Some("heal")),
+    (id: "scroll_fire", name: "ファイアの巻物", kind: Scroll, weight: 1, teaches: Some("firebolt")),
+
+    // --- empty bottle (plan7): a liquefied spell (秘薬) is stored in one ---
+    (id: "bottle_empty", name: "からのビン", kind: EmptyContainer, hardness: 2, weight: 1, capacity: 1),
+
     // --- misc ---
     (id: "key_bronze", name: "あかがねのかぎ", kind: General, weight: 1, important: true),
     (id: "torch", name: "たいまつ", kind: Light, weight: 2, temperature: 60),

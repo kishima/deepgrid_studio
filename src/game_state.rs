@@ -18,3 +18,10 @@ pub struct DataScreen {
 pub struct SelectedMember {
     pub index: usize,
 }
+
+/// Which data-screen tab is showing (plan7). `false` = items/equipment (the
+/// plan5 view), `true` = the magic tab. The M key / 魔法 icon set this true.
+#[derive(Resource, Default)]
+pub struct DataView {
+    pub magic: bool,
+}

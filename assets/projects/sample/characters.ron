@@ -76,7 +76,9 @@
         ),
         model: "models/party/mage.glb",
         portrait: "projects/sample/portraits/mage.png",
-        items: ["ring_power", "bread"],
+        items: ["ring_power", "bread", "bottle_empty"],
+        // メリナ(mage): starts knowing an attack spell and a lighting spell.
+        magics: ["firebolt", "light2"],
     ),
     (
         id: "rogue_hooded",
@@ -111,6 +113,8 @@
         ),
         model: "models/party/rogue_hooded.glb",
         portrait: "projects/sample/portraits/priest.png",
+        // ソロン(priest 役): starts knowing healing and resurrection.
+        magics: ["heal", "revive50"],
     ),
     (
         id: "rogue",

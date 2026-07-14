@@ -159,6 +159,9 @@
         (id: "chest_wood", x: 5, y: 6, floor: 1),
         (id: "barrel", x: 7, y: 6, floor: 1),
         (id: "glow_stone", x: 8, y: 6, floor: 1),
+        // Teaching scrolls (plan7): pick up and read from the data screen.
+        (id: "scroll_heal", x: 7, y: 5, floor: 1),
+        (id: "scroll_fire", x: 8, y: 5, floor: 1),
     ],
     // Monster placements (plan6). The floor-1 sentinel is immobile with sight 0
     // (for the monster/combat scenes); the floor-0 wanderers can't use ladders,
