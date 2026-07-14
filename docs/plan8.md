@@ -1,171 +1,268 @@
 # plan8: イベントとギミック
 
-> **先行詳細化に関する注意**: plan5〜7 完了前に書かれた計画。着手時に
-> 前提を実際のリポジトリ状態と照合し、この文書を更新してから始めること。
-
 ## この文書について
 
-第8実装計画書。仕様源は [dandan_spec_event.md](dandan_spec_event.md)(全面的に)
-と [dandan_spec_mapeditor.md](dandan_spec_mapeditor.md)(ギミック・連絡通路)、
-[plan2.md](plan2.md)「追補」(穴・ドア初期状態・ホロスコープ12方向)。
+第8実装計画書(2026-07-14、plan7 完了後の実状に合わせて詳細化済み)。
+仕様源は [dandan_spec_event.md](dandan_spec_event.md)(全面的に)、
+[dandan_spec_mapeditor.md](dandan_spec_mapeditor.md)(ギミック・連絡通路)、
+[plan2.md](plan2.md)「追補」(穴・ドア初期状態・ホロスコープ上下)。
+開発環境の制約は [plan1.md](plan1.md)。数値レンジは参考値。
 
 ## ゴール
 
-ダンジョンを「仕掛けのある迷宮」にする。イベントシステム(フラグ・遅延・
-14種のアクション)とトリガー(鍵穴・スイッチ・しかけ床・ワープポイント)、
-plan2 追補の地形拡張、レベル間移動(連絡通路)を実装する。
+ダンジョンを「仕掛けのある迷宮」にする: イベント(フラグ・遅延・アクション)、
+トリガー(鍵穴・スイッチ・しかけ床・ワープ)、地形拡張(穴・開始開状態ドア・
+書ける壁・上下ホロスコープ)、そして連絡通路による**レベル間移動**。
 
-## 現状(想定: plan7 完了時点)
+## 現状(plan7 完了時点の実状)
 
-- アイテム・モンスター・魔法が動作。プロジェクト形式 v5。
-- ドアは kind 単位の開閉のみ(Space で正面をトグル)。
-- レベルは常に levels[0] だけがプレイされる。
+- プロジェクト形式 **v5**(`PROJECT_VERSION = 5`)。magics.ron まで込み。
+- `Block` は **Copy な enum**(Wall/Empty/Water/Fire/Poison/Ladder/
+  Door{kind}/Horoscope{pass_from: Facing})。マップ文字変換は
+  **src/project.rs の `char_to_block` / 逆変換**(loader.rs は存在しない)。
+  現行文字: `# . ~ ^ % H 1 2 < > n v`。
+- ダンジョンメッシュは `render/dungeon_mesh.rs` の `setup_dungeon` が
+  **起動時に一括生成**(セル単位エンティティだが再構築の仕組みなし)。
+  ドアのみ `DoorTile`+Visibility で開閉に追従。
+- **levels[0] 固定ロード**(main.rs)。レベル間移動の仕組みなし。
+- サイクル駆動基盤(clock.rs `CycleTick`)、`GameRng`(固定シード対応)、
+  `RulesConfig`(rules.rs)、メッセージ/autotest(**33ステップ**)確立済み。
+- しかけ床の重量条件に使える総重量計算は plan5 の
+  `Inventory::total_weight`(パーティ合計は足せばよい)。
+- エディター(egui)は plan3 の2D編集+基本パレットのみ。
 
 ## スコープ
 
 ### やること
 
-1. イベントデータモデル(トリガー、フラグ条件、遅延、アクション14種)
-2. イベントフラグ(既定64個、LimitsConfig で拡張可)と実行キュー
-3. トリガーブロック: 鍵穴・スイッチ(4形態)、しかけ床(3条件)、
-   ワープポイント(隠し属性)
-4. 地形拡張: 穴ブロック、ドアの初期開閉状態、書ける壁、
-   ホロスコープの上下方向(12方向の一部)
-5. アクション実装: ワープ/水位変更/パーティ復活/モンスター発生/
-   アイテム発生/ブロック発生/ドア開閉/移動モード設定/スイッチ操作/
-   フラグ変更/連結終了・ループ(+BGM変更とデモ起動は**スタブ**、plan10で実体化)
-6. 連絡通路(レベル間移動)とマルチレベルプレイ
-7. マップエディターへの最小限の配置対応(トリガー+地形拡張ブロック)
-8. 検証シーンとユニットテスト
+1. イベントデータモデル(トリガー/フラグ条件 AND・OR/遅延/アクション列)
+   とプロジェクト形式 **v6**
+2. イベントフラグ(既定64、`limits.event_flags`)と実行キュー(サイクル駆動)
+3. トリガーブロック: 鍵穴、スイッチ(戻らない/トグル/プッシュ)、
+   しかけ床(踏む/重量/アイテム設置)、ワープポイント(隠し属性)
+4. 地形拡張: 穴、ドアの初期開状態、書ける壁(閲覧のみ)、上下ホロスコープ
+5. アクション実装: ワープ/水位変更/パーティ復活/モンスター発生/アイテム発生/
+   ブロック発生/ドア開閉/移動モード設定/スイッチ操作/フラグ変更/連結終了/
+   ループ(**BGM変更とデモ起動はスタブ**: メッセージ+発火ログのみ、plan10 で実体化)
+6. **ダンジョンメッシュの部分再構築**(SetBlock/SetLiquid のための基盤)
+7. 連絡通路(階段ブロック)とマルチレベル+レベルごとの状態保持
+8. エディターへの最小対応(新ブロックのパレット追加。イベント編集は plan9)
+9. autotest 9ステップ追加+ユニットテスト+検証シーン
 
 ### やらないこと(後続planへ)
 
-- イベントエディターUI(パラメーター編集はRON手書き) → plan9
-- BGM変更・デモ起動の実体 → plan10(アクションの枠と発火ログだけ作る)
-- 鉛筆で壁に書く操作の入力UI(書ける壁の表示のみ実装、書き込みは
-  データがあれば表示する形) → plan9 で入力UI
+- イベントエディターUI(パラメーターはRON手書き) → plan9
+- BGM・デモの実体 → plan10
+- 書ける壁への**書き込み**UI(鉛筆アイテム連動) → plan9
+  (plan8 はデータにある文章の閲覧のみ)
+- ホロスコープの斜め方向(12方向の残り) → 必要になったとき
+- 秘薬・モンスター発生イベントのエディター配置 → plan9
 
 ## データモデル
 
-`src/event.rs`(新設):
+### 地形(Block は Copy を維持する)
 
 ```rust
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum TriggerKind {
-    Keyhole { key_item: String },       // 鍵穴: 指定アイテム使用で発動
-    SwitchOneWay,                       // 戻らない(一度ONになったら固定)
-    SwitchToggle,                       // トグル
-    SwitchPush,                         // プッシュ(押している間/押した瞬間)
-    FloorPlate { condition: PlateCond },// しかけ床
-    WarpPoint { hidden: bool },
-}
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum PlateCond { Step, Weight { min_x100g: i32 }, ItemPlaced { item: Option<String> } }
-
-#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
-pub enum FlagJoin { And, Or }
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct FlagCond { pub flag: usize, pub must_be_on: bool }
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub enum EventAction {
-    Warp { level: usize, x: i32, y: i32, floor: usize, facing: Facing },
-    SetLiquid { level: usize, floor: usize, x: i32, y: i32, kind: Option<Block> }, // None=抜く
-    ChangeBgm { bgm: String },          // plan10 まで発火ログのみ
-    ReviveParty,
-    SpawnMonster { monster: String, x: i32, y: i32, floor: usize },
-    SpawnItem { item: String, x: i32, y: i32, floor: usize },
-    SetBlock { x: i32, y: i32, floor: usize, block: Block },
-    StartDemo { demo: String },         // plan10 まで発火ログのみ
-    SetMoveMode { mode: MoveMode },     // Normal / Free(空中歩行) / Locked
-    OperateSwitch { event: String, on: bool },
-    SetFlag { flag: usize, on: bool },
-    EndChain,                            // 連結終了
-    Loop,                                // 先頭アクションへ戻る(遅延を挟んで)
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct EventDef {
-    pub id: String,
-    pub trigger: TriggerKind,
-    pub at: (i32, i32, usize),          // 設置座標(トリガーブロック位置)
-    pub delay_cycles: u64,              // 実行遅延(参考: 0〜63)
-    pub flags: Vec<FlagCond>,           // 参照フラグ
-    pub join: FlagJoin,                 // AND / OR
-    pub actions: Vec<EventAction>,      // 順に実行(連結)
+pub enum Block {
+    // ...既存...
+    /// 穴: 支持があっても床を張らず、進入すると落下(plan2追補)。
+    Hole,
+    /// 連絡通路(階段)。進入すると stairs_links の接続先レベルへ遷移。
+    Stairs { up: bool },
+    /// 書ける壁。本文は LevelData.wall_texts に持つ(Block の Copy 維持のため)。
+    WritableWall,
+    /// 上下ホロスコープ: 垂直方向の一方通行。from_below=true なら
+    /// 下からの通過(はしご上り・落下抜けの禁止側に注意)のみ許す。
+    HoroscopeVert { from_below: bool },
+    /// トリガーブロック。パラメーターは events 側に座標で紐づく。
+    Keyhole,
+    Switch,
+    FloorPlate,
+    WarpPoint,
 }
 ```
 
-- レベルファイルに `events: [EventDef]` を追加(プロジェクト形式 v6)。
-- 実行時: `EventFlags`(既定64個。`limits.event_flags`)、
-  `EventQueue`(発火済みイベントの遅延カウントダウンをサイクル駆動で処理)。
-- Loop は「actions 先頭から再実行(delay を再適用)」。無限ループ前提の
-  演出用。EndChain はそこで打ち切り(条件分岐的に使う)。
+- マップ文字の追加: `o`=Hole `u`/`d`=Stairs(上/下) `W`=WritableWall
+  `^v` は使用済みのため上下ホロスコープは `A`(下から上OK)/`V`(上から下OK)、
+  `K`=Keyhole `S`=Switch `P`=FloorPlate `T`=WarpPoint、
+  `!`=Door kind0 の初期開 `@`=Door kind1 の初期開。
+  `char_to_block`/逆変換(project.rs)を対で更新し、ラウンドトリップ
+  テストの全文字リストにも追加する。
+- ドア初期開状態: ロード時に `!`/`@` を見つけたら DoorStates の初期値を
+  開にする(ブロックとしては既存 Door{kind} と同一。glyph は保存時に
+  DoorStates の**初期値**を見て書き分ける)。
+- LevelData 追加(すべて serde default):
+  - `wall_texts: Vec<(i32, i32, usize, String)>`(x,y,floor,本文)
+  - `stairs_links: Vec<StairsLink>`
+    `StairsLink { from: (i32,i32,usize), to_level: usize, to: (i32,i32,usize), to_facing: Facing }`
+  - `events: Vec<EventDef>`
 
-## 地形拡張(plan2 追補の取り込み)
+### イベント
 
-- `Block::Hole`: 床を張らない・進入すると支持を無視して落下。
-  マップ文字 `o`。
-- **ドア初期状態**: マップ文字 `1`/`2` は「閉」、`!`/`@` を「開」として追加
-  (kind0開/kind1開)。DoorStates の初期値をマップから構成する。
-- `Block::WritableWall { text: String }`: 書ける壁。正面で「見る」と本文を
-  メッセージ表示。編集入力UIは plan9(データにあれば表示)。
-- ホロスコープ上下: `pass_from` に Up/Down を追加(はしご以外の垂直移動
-  制御。落下・はしごの通過判定に組み込む)。12方向の斜め等は対象外のまま。
+```rust
+pub enum TriggerKind {
+    Keyhole { key_item: String },        // 鍵は消費しない(暫定)
+    SwitchOneWay,                        // 一度ONで固定
+    SwitchToggle,
+    SwitchPush,                          // 押した瞬間のみ発火(状態を持たない)
+    FloorPlate { cond: PlateCond },
+    WarpPoint { hidden: bool },          // hidden はマーカー非表示
+    None,                                // トリガー無し(OperateSwitch 専用の的)
+}
+pub enum PlateCond { Step, Weight { min_x100g: i32 }, ItemPlaced { item: Option<String> } }
 
-## 連絡通路(レベル間移動)
+pub struct FlagCond { pub flag: usize, pub must_be_on: bool }
+pub enum FlagJoin { And, Or }
 
-- project.ron の levels 配列が複数レベルを持てるのは既存。
-  `EventAction::Warp` の level 指定でレベルを跨ぐ。
-- 「連絡通路」は階段の見た目を持つ専用ブロック `Block::Stairs { up: bool }`
-  として実装し、進入すると対応する接続先(レベルファイルの
-  `stairs_links: [(from(x,y,floor), to_level, to(x,y,floor,facing))]`)へ遷移。
-- レベル遷移時: 現レベルのモンスター状態・ドア状態・落ちたアイテムを
-  メモリ上に保持(レベルごとの RuntimeState マップ)。戻ったとき復元される。
-  フラグはゲーム全体で共有。
-- sample プロジェクトに level01 を追加し、階段で行き来できるようにする。
+pub enum EventAction {
+    Warp { level: usize, x: i32, y: i32, floor: usize, facing: Facing },
+    SetLiquid { x: i32, y: i32, floor: usize, kind: Option<LiquidKind> }, // None=抜く
+    ChangeBgm { bgm: String },           // スタブ(plan10)
+    ReviveParty,                         // 全員 down解除+HP全快(オリジナル準拠)
+    SpawnMonster { monster: String, x: i32, y: i32, floor: usize },
+    SpawnItem { item: String, x: i32, y: i32, floor: usize },
+    SetBlock { x: i32, y: i32, floor: usize, block: Block },
+    StartDemo { demo: String },          // スタブ(plan10)
+    SetMoveMode { mode: MoveMode },      // Normal / Free(空中歩行) / Locked
+    OperateSwitch { event: String, on: bool },
+    SetFlag { flag: usize, on: bool },
+    EndChain,
+    Loop,                                // 先頭へ(delay を再適用)
+}
+
+pub struct EventDef {
+    pub id: String,
+    pub trigger: TriggerKind,
+    pub at: (i32, i32, usize),           // トリガーブロックの座標
+    #[serde(default)] pub delay_cycles: u64,      // 参考: 0〜63
+    #[serde(default)] pub flags: Vec<FlagCond>,
+    #[serde(default)] pub join: FlagJoin,          // 既定 And
+    pub actions: Vec<EventAction>,
+}
+```
+
+- 実行時リソース: `EventFlags`(Vec<bool>、`limits.event_flags`)、
+  `EventQueue`(発火済み: (level, event id, 発火サイクル+delay, 次action index))。
+  すべて `CycleTick` 駆動。1サイクルに複数アクションを進めてよいが、
+  Loop は必ず delay を挟む(0 でも1サイクル待つ — 無限ループでフリーズ
+  しないための規約)。
+- 条件評価: flags が空なら常に成立。And/Or は must_be_on との一致で判定。
+- 発火ログ: `info!` で「event fired: id (trigger)」を必ず出す(デバッグの
+  主要手段)。スタブは加えてメッセージ「♪BGMが〜(未実装)」等。
+
+### 挙動の要点
+
+- **鍵穴**: 正面の Keyhole に Space → パーティの誰かが key_item を所持で
+  発火(SwitchOneWay 同様、一度使うと再発火しない)。鍵は消費しない(暫定。
+  変える場合は本文書を更新)。所持なし→「かぎあなが ある。あう鍵がない」。
+- **スイッチ**: 正面に Space。OneWay=初回のみ/Toggle=ON・OFF交互
+  (OFF時はアクション列を**再実行しない**、フラグ SetFlag だけ反転…は
+  複雑なので、**Toggle は ON/OFF どちらへの切替でもアクション列を実行**し、
+  作り手がフラグ条件で分岐する、を規約とする)/Push=押すたび発火。
+- **しかけ床**: プレイヤーがそのタイルに進入したサイクルに評価。
+  Weight はパーティ全員の総重量(×100g)合計 ≥ min。ItemPlaced は
+  そのタイルに床アイテム(指定 id、None=何でも)が置かれた時
+  (handle_place 後にチェック。置いた瞬間に発火)。
+- **ワープポイント**: 進入で即 Warp アクション(EventDef の actions を実行)。
+  hidden: true は3D表示なし(見えない罠)。false は薄く光るマーカー。
+- **穴**: 進入→支持無視で落下(既存の landing_floor 探索から開始フロアを
+  変えるだけ)。Hole は「その場で下が抜けている」ので Hole セル自体に
+  立つことはない。
+- **SetBlock/SetLiquid**: ダンジョンデータ(Dungeon リソース)を書き換え、
+  `TileDirty { x, y, floor }` イベントで**そのセル+隣接6方向**のメッシュを
+  再構築する(setup_dungeon をセル単位関数に分解し、`TilePos` マーカー付き
+  エンティティを despawn→respawn)。プレイヤー/モンスターのいるセルを
+  Wall にされた場合: 1フロア上へ「押し出し落下」(埋まり防止の単純規約)。
+- **移動モード**: `MoveMode` リソース。Free は支持判定を無視(落下しない。
+  はしご不要で昇降可)、Locked は移動系 Command を全拒否(イベント演出用)。
+  エディターの自由移動(plan9)もこれを使う。
+
+## 連絡通路とマルチレベル
+
+- `CurrentLevel(usize)` リソース新設。レベルに属すエンティティ
+  (メッシュ、床アイテム、モンスター、トリガーマーカー)へ `LevelScoped`
+  マーカーを付け、遷移時に一括 despawn → 遷移先を構築。
+- **RuntimeState を Level ごとに保持**: `LevelStates: HashMap<usize, LevelState>`
+  - LevelState: モンスター状態(hp/pos/死亡・再生タイマー)、床アイテムの
+    現状(初期配置との差分ではなく**全量スナップショット**でよい)、
+    DoorStates、発火済みトリガー(OneWay/鍵穴の消費状態)、水位変更などの
+    Block 差分(`Vec<((x,y,floor), Block)>`)
+  - 遷移時: 現レベルを保存 → 遷移先があれば復元、なければ初期構築。
+  - フラグ・MoveMode・パーティはグローバル(保持しない)。
+- 階段: Stairs へ進入 → stairs_links から接続を引く(無ければ
+  「くずれていて 通れない」)→ フェード等はなしで即遷移+
+  メッセージ「階段を のぼった/おりた」。
+- sample に **level01.ron** を追加(小さめ。階段で往復、ワープの的、
+  SetBlock で開く隠し部屋、といった plan8 機能のショーケース)。
+  project.ron の levels を2件に。
 
 ## エディター対応(最小限)
 
-plan3 の2Dマップエディターに以下を追加(フルのイベント編集は plan9):
+- パレットに新ブロック(o u d W A V K S P T ! @)を追加(色+記号表示は
+  plan3 の仕組みに追随)。
+- events / wall_texts / stairs_links は RON 手書き(plan9 でUI化)。
+  保存時、トリガーブロックの座標に対応する EventDef が無い場合は
+  ステータスバーに警告(逆も同様)。
 
-- パレット追加: 穴、開状態ドア、階段(上下)、書ける壁、
-  鍵穴/スイッチ/しかけ床/ワープポイント(トリガー種別はプレースホルダで
-  設置のみ。パラメーターは RON 手書き)
-- events の座標とパレット設置座標の整合チェック(保存時に警告)
+## autotest 追加ステップ(34〜42)
+
+- 34 `plate-step`: しかけ床(Step)を踏む → SpawnMonster が発火し
+  指定座標にモンスターが現れる
+- 35 `flags-andor`: フラグ条件 And(不成立→発火しない)→ SetFlag 後に
+  成立して発火。Or も1ケース
+- 36 `delay-loop`: delay 付きイベントが指定サイクル後に実行される。
+  Loop イベントが2周以上実行され、EndChain で止まるイベントは1周で止まる
+- 37 `keyhole`: 鍵なし→不発+メッセージ、鍵所持→ドア開(DoorStates)+
+  再使用しても再発火しない
+- 38 `switch-forms`: OneWay/Toggle/Push の発火回数の差をアサート
+- 39 `warp-hidden`: 隠しワープ進入 → 座標・向きが跳んでいる
+- 40 `setblock`: SetBlock で通路が壁になり移動が拒否される → SetLiquid で
+  水になり hazard が作動する(既存の水ステップ流用)
+- 41 `stairs-state`: level01 へ移動 → level00 に戻る → 置いたアイテムと
+  倒したモンスターの状態が保持されている
+- 42 `hole-and-vert`: 穴で落下する。上下ホロスコープの禁止方向で
+  はしご移動が拒否される
+
+(トリガーやフラグの直接操作は不可。すべて実プレイ操作
+(ScriptedInput/イベント)経由。座標は autotest 用に level00/01 に
+専用の小部屋を用意してよい — 既存33ステップのエリアと干渉しないこと)
 
 ## 実装ステップ
 
-1. データモデル+v6ローダー+ラウンドトリップテスト
-2. フラグ・キュー・遅延・AND/OR(ユニットテスト: 条件評価と遅延)
-3. トリガーブロックの設置・表示・作動(鍵穴はアイテム使用、
-   しかけ床は重量計算に plan5 の総重量を利用)
-4. アクション実装(スタブ2種含む)。SetBlock/SetLiquid は描画の
-   再構築が必要 → dungeon_mesh をセル単位で更新できるようにする
-5. 地形拡張(穴・ドア初期状態・書ける壁・ホロスコープ上下)
-6. 連絡通路とレベル間 RuntimeState
-7. エディターのパレット追加
-8. 検証シーン: `plate`(しかけ床でモンスター出現)、`warp`(ワープ後の
-   位置)、`stairs`(level01 側で撮影)、`hole`(穴から落下)
+1. Block 拡張+文字変換+ラウンドトリップテスト(v6)
+2. メッシュの部分再構築(TileDirty。SetBlock より先に単体で作る —
+   ドア初期開・水位変更の下地)
+3. イベント基盤(フラグ/キュー/遅延/AND-OR/Loop/EndChain。
+   条件評価と遅延はユニットテスト)
+4. トリガー(鍵穴/スイッチ3形態/しかけ床3条件/ワープ)
+5. アクション残り(SetBlock/SetLiquid/Spawn系/ReviveParty/MoveMode/
+   OperateSwitch/スタブ2種)
+6. 地形拡張(穴・初期開ドア・書ける壁閲覧・上下ホロスコープ)
+7. マルチレベル(CurrentLevel/LevelScoped/LevelStates)+level01
+8. エディターパレット+保存時警告
+9. autotest 34〜42+検証シーン(`plate|warp|stairs|hole`)
 
 ## 受け入れ基準
 
-1. ビルド完走、clippy/test 通過。
-2. `DEEPGRID_DEBUG_SHOT=plate|warp|stairs|hole` 撮影+既存シーン全通過。
-3. 手動確認: スイッチ4形態の挙動差、フラグAND/OR、遅延、ループイベント、
-   鍵穴に鍵を使う、しかけ床の重量条件、隠しワープ、書ける壁の閲覧、
-   階段でレベルを往復して状態が保持されること。
-4. sample の RON だけで全ギミックのデモが再現できる。
+1. ビルド完走、clippy 警告なし、`cargo test` 全通過。
+2. `DEEPGRID_AUTOTEST=1` が **42ステップ全PASS**・終了コード0。
+3. `DEEPGRID_DEBUG_SHOT=plate|warp|stairs|hole` が撮影でき(mtime確認)、
+   既存13シーンも全部通る。
+4. 手動確認(操作感のみ): 仕掛けの発見と作動の手触り、レベル遷移の
+   違和感、隠しワープの「見えなさ」。
+5. sample(level00+level01)のデータだけで全ギミックを体験できる。
 
 ## 実装上の注意
 
-- イベント処理は必ずサイクル駆動(clock.rs)。フレーム依存禁止。
-- SetBlock で通行不能化した場所にプレイヤー/モンスターがいる場合は
-  押し出さず「埋まったら1フロア上へ落下扱い」等の単純ルールを決めて
-  文書に追記する。
-- フラグ番号は 0-based。エディター表示は 0〜63(既定)。
-- 発火ログ(どのイベントがいつ発火したか)を debug ログに出す
-  (デバッグの主要手段になる)。
-- スタブ(BGM/デモ)はメッセージウインドーに「♪BGMが変わった(未実装)」
-  等を出して発火が分かるようにする。
+- Block の **Copy を壊さない**(文字列を持つ変種を作らない。本文・
+  パラメーターは LevelData/EventDef 側に座標で紐づける)。
+- イベント処理は CycleTick 駆動。Loop の最低1サイクル規約を守る
+  (無限ループ防止)。
+- 発火済み状態(OneWay/鍵穴)は LevelState に含めてレベル往復で保持。
+- SetBlock 系のメッシュ再構築は「セル+隣接」だけにとどめ、全再構築を
+  しない(40×40×5 で目に見えて止まるため)。
+- 既存 autotest(33ステップ)のエリア・前提を壊さない(新ギミックの
+  サンプル配置は既存の動線の外に)。
+- `char_to_block` と逆変換・エディターパレット・ラウンドトリップテストの
+  文字リストは**必ず同時に**更新する(1箇所でも漏れると保存で壊れる)。
+- rand/GameRng・`ClusterConfig::Single`・UI棲み分けの既存規約は維持。
