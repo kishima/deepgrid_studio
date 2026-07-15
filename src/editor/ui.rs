@@ -6,6 +6,9 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 
+use super::labels::{
+    block_label, flag_join_label, growth_label, move_mode_label, move_type_label, plate_cond_label,
+};
 use super::{EditorState, PALETTE, PlaceLayer, Tab};
 use crate::character::{GrowthType, StatKind};
 use crate::dungeon::{Block, Facing};
@@ -22,7 +25,8 @@ pub fn editor_ui_window(mut contexts: EguiContexts, mut state: ResMut<EditorStat
 }
 
 /// Install the bundled Japanese pixel font so egui labels render (egui's default
-/// font has no CJK glyphs). Done once per context.
+/// font has no CJK glyphs), and bump the default text sizes (2026-07 feedback:
+/// エディットの画面の文字が小さい). Done once per context.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
@@ -32,6 +36,14 @@ fn install_fonts(ctx: &egui::Context) {
     fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "jp".to_owned());
     fonts.families.entry(egui::FontFamily::Monospace).or_default().insert(0, "jp".to_owned());
     ctx.set_fonts(fonts);
+    ctx.style_mut(|style| {
+        use egui::{FontFamily, FontId, TextStyle};
+        style.text_styles.insert(TextStyle::Small, FontId::new(12.0, FontFamily::Proportional));
+        style.text_styles.insert(TextStyle::Body, FontId::new(16.0, FontFamily::Proportional));
+        style.text_styles.insert(TextStyle::Button, FontId::new(16.0, FontFamily::Proportional));
+        style.text_styles.insert(TextStyle::Monospace, FontId::new(14.0, FontFamily::Monospace));
+        style.text_styles.insert(TextStyle::Heading, FontId::new(22.0, FontFamily::Proportional));
+    });
 }
 
 /// Build the whole editor UI. Reused for the window and the render-to-image shot.
@@ -239,7 +251,7 @@ fn map_view(ctx: &egui::Context, state: &mut EditorState) {
             PlaceLayer::Block => {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     for &block in PALETTE {
-                        if ui.selectable_label(state.selected == block, block_name(block)).clicked() {
+                        if ui.selectable_label(state.selected == block, block_label(block)).clicked() {
                             state.selected = block;
                         }
                     }
@@ -255,7 +267,7 @@ fn map_view(ctx: &egui::Context, state: &mut EditorState) {
             }
             PlaceLayer::Trigger => {
                 for b in [Block::Keyhole, Block::Switch, Block::FloorPlate, Block::WarpPoint] {
-                    ui.selectable_value(&mut state.place_trigger, b, block_name(b));
+                    ui.selectable_value(&mut state.place_trigger, b, block_label(b));
                 }
                 ui.small("置くとイベント雛形を自動生成");
             }
@@ -266,7 +278,7 @@ fn map_view(ctx: &egui::Context, state: &mut EditorState) {
         ui.horizontal(|ui| {
             let n_levels = state.proj.levels.len();
             let mut level = state.level_index;
-            egui::ComboBox::from_label("Level").selected_text(format!("{level}")).show_ui(ui, |ui| {
+            egui::ComboBox::from_label("レベル").selected_text(format!("{level}")).show_ui(ui, |ui| {
                 for i in 0..n_levels {
                     ui.selectable_value(&mut level, i, format!("{i}"));
                 }
@@ -274,7 +286,7 @@ fn map_view(ctx: &egui::Context, state: &mut EditorState) {
             state.select_level(level);
             let n_floors = state.cur().floor_count();
             let mut floor = state.floor_index;
-            egui::ComboBox::from_label("Floor").selected_text(format!("{floor}")).show_ui(ui, |ui| {
+            egui::ComboBox::from_label("フロア").selected_text(format!("{floor}")).show_ui(ui, |ui| {
                 for i in 0..n_floors {
                     ui.selectable_value(&mut floor, i, format!("{i}"));
                 }
@@ -444,7 +456,7 @@ fn characters_tab(ctx: &egui::Context, state: &mut EditorState) {
             ui.horizontal(|ui| {
                 ui.label("成長型");
                 for g in [GrowthType::Average, GrowthType::EarlyBloomer, GrowthType::LateBloomer, GrowthType::Genius, GrowthType::Talentless] {
-                    if ui.selectable_value(&mut ch.growth, g, format!("{g:?}")).changed() {
+                    if ui.selectable_value(&mut ch.growth, g, growth_label(g)).changed() {
                         dirty = true;
                     }
                 }
@@ -544,9 +556,9 @@ fn items_tab(ctx: &egui::Context, state: &mut EditorState) {
             dirty |= text_row(ui, "名", &mut d.name);
             ui.horizontal(|ui| {
                 ui.label("種別");
-                egui::ComboBox::from_id_salt("item_kind").selected_text(format!("{:?}", d.kind)).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt("item_kind").selected_text(d.kind.label()).show_ui(ui, |ui| {
                     for k in ITEM_KINDS {
-                        if ui.selectable_value(&mut d.kind, k, format!("{k:?}")).changed() {
+                        if ui.selectable_value(&mut d.kind, k, k.label()).changed() {
                             dirty = true;
                         }
                     }
@@ -610,7 +622,7 @@ fn items_tab(ctx: &egui::Context, state: &mut EditorState) {
                 dirty = true;
             }
             ui.horizontal(|ui| {
-                ui.label("teaches");
+                ui.label("習得魔法");
                 let mut cur = d.teaches.clone().unwrap_or_default();
                 if id_combo(ui, "item_teaches", &mut cur, &magic_ids) {
                     d.teaches = if cur.is_empty() { None } else { Some(cur) };
@@ -696,7 +708,7 @@ fn monsters_tab(ctx: &egui::Context, state: &mut EditorState) {
             ui.horizontal(|ui| {
                 ui.label("移動型");
                 for mt in [MoveType::Ground, MoveType::Air, MoveType::None] {
-                    if ui.selectable_value(&mut d.move_type, mt, format!("{mt:?}")).changed() {
+                    if ui.selectable_value(&mut d.move_type, mt, move_type_label(mt)).changed() {
                         dirty = true;
                     }
                 }
@@ -876,7 +888,7 @@ fn events_tab(ctx: &egui::Context, state: &mut EditorState) {
             ui.horizontal(|ui| {
                 ui.label("結合");
                 for j in [FlagJoin::And, FlagJoin::Or] {
-                    if ui.selectable_value(&mut ev.join, j, format!("{j:?}")).changed() { dirty = true; }
+                    if ui.selectable_value(&mut ev.join, j, flag_join_label(j)).changed() { dirty = true; }
                 }
             });
             let mut fremove = None;
@@ -973,9 +985,9 @@ fn trigger_editor(ui: &mut egui::Ui, trigger: &mut TriggerKind, item_ids: &[Stri
             if ui.checkbox(hidden, "隠し").changed() { dirty = true; }
         }
         TriggerKind::FloorPlate { cond } => {
-            egui::ComboBox::from_id_salt("plate_cond").selected_text(format!("{cond:?}")).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("plate_cond").selected_text(plate_cond_label(cond)).show_ui(ui, |ui| {
                 for c in [PlateCond::Step, PlateCond::Weight { min_x100g: 0 }, PlateCond::ItemPlaced { item: None }] {
-                    if ui.selectable_value(cond, c.clone(), format!("{c:?}")).changed() { dirty = true; }
+                    if ui.selectable_value(cond, c.clone(), plate_cond_label(&c)).changed() { dirty = true; }
                 }
             });
             if let PlateCond::Weight { min_x100g } = cond
@@ -1034,7 +1046,7 @@ fn actions_editor(ui: &mut egui::Ui, actions: &mut Vec<EventAction>, item_ids: &
                 }
                 EventAction::SetMoveMode { mode } => {
                     for m in [MoveMode::Normal, MoveMode::Free, MoveMode::Locked] {
-                        if ui.selectable_value(mode, m, format!("{m:?}")).changed() { dirty = true; }
+                        if ui.selectable_value(mode, m, move_mode_label(m)).changed() { dirty = true; }
                     }
                 }
                 _ => {}
@@ -1349,33 +1361,6 @@ fn action_label(a: &EventAction) -> String {
 }
 
 // ------------------------------------------------------------------ block visuals (from plan3)
-
-fn block_name(block: Block) -> &'static str {
-    match block {
-        Block::Wall => "Wall",
-        Block::Empty => "Empty",
-        Block::Water => "Water",
-        Block::Fire => "Fire",
-        Block::Poison => "Poison",
-        Block::Ladder => "Ladder",
-        Block::Door { kind: 0 } => "Door 1",
-        Block::Door { .. } => "Door 2",
-        Block::Horoscope { pass_from: Facing::West } => "Horo <W",
-        Block::Horoscope { pass_from: Facing::East } => "Horo >E",
-        Block::Horoscope { pass_from: Facing::North } => "Horo ^N",
-        Block::Horoscope { pass_from: Facing::South } => "Horo vS",
-        Block::Hole => "Hole",
-        Block::Stairs { up: true } => "Stairs Up",
-        Block::Stairs { up: false } => "Stairs Dn",
-        Block::WritableWall => "Writable",
-        Block::HoroscopeVert { from_below: true } => "VertHoro Up",
-        Block::HoroscopeVert { from_below: false } => "VertHoro Dn",
-        Block::Keyhole => "Keyhole",
-        Block::Switch => "Switch",
-        Block::FloorPlate => "Plate",
-        Block::WarpPoint => "Warp",
-    }
-}
 
 fn cell_color(block: Block, footing: bool) -> egui::Color32 {
     match block {

@@ -8,6 +8,7 @@
 //! and calls these methods, so edits stay centralised and undoable.
 
 mod edit3d;
+mod labels;
 pub mod ops;
 mod shot;
 mod ui;

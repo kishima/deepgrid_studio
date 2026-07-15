@@ -190,10 +190,13 @@ fn spawn_cell(commands: &mut Commands, p: &Palette, level: &Level, x: i32, y: i3
     // block beneath, or bedrock) — but never under a hole.
     let below_solid = level.floor(f.wrapping_sub(1)).and_then(|b| b.get(x, y)).is_some_and(|b| b.is_solid());
     if !block.is_hole() && (f == 0 || below_solid) {
+        // Lift the tile a hair off the supporting cube's top face — coplanar
+        // quads z-fight (same trick as the ceiling slab).
+        let lift = if below_solid { 0.01 } else { 0.0 };
         commands.spawn((
             Mesh3d(p.floor_tile.clone()),
             MeshMaterial3d(p.floor_mat.clone()),
-            Transform::from_xyz(cx, yb, cz),
+            Transform::from_xyz(cx, yb + lift, cz),
             tile,
             LevelScoped,
         ));
