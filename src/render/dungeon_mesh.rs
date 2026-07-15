@@ -312,7 +312,9 @@ fn spawn_decor(commands: &mut Commands, p: &Palette, block: Block, tile: TilePos
     }
 }
 
-fn build_palette(
+/// Build the shared tile palette (meshes + materials). Public so the 3D editor
+/// (plan9.5) can build its own scene without a play-mode `Dungeon`.
+pub fn build_palette(
     asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,

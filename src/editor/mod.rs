@@ -7,9 +7,11 @@
 //! is undone by whole-project snapshots. The egui layer (`ui`) only *reads* state
 //! and calls these methods, so edits stay centralised and undoable.
 
+mod edit3d;
 pub mod ops;
 mod shot;
 mod ui;
+mod walk;
 
 use std::collections::HashMap;
 
@@ -17,7 +19,7 @@ use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 
 use crate::debug_shot;
-use crate::dungeon::{Block, Facing, GridPos};
+use crate::dungeon::{Block, Dungeon, Facing, GridPos};
 use crate::item::ItemPlacement;
 use crate::monster::MonsterPlacement;
 use crate::project::{self, LevelData, Project};
@@ -102,10 +104,17 @@ pub struct StartPlacement {
     pub facing: Facing,
 }
 
-/// One undoable map edit: a set of cell changes and/or a start-placement change.
+/// One undoable map edit: cell changes, a start move, and/or the current
+/// level's placement lists (items / monsters / events) as before→after. The
+/// list changes make item/monster/trigger placement undoable from the map tab
+/// itself (Map-tab undo never reaches the whole-project content snapshots).
+#[derive(Default)]
 pub struct EditOp {
     cells: Vec<(GridPos, Block, Block)>,
     start_change: Option<(StartPlacement, StartPlacement)>,
+    items_change: Option<(Vec<ItemPlacement>, Vec<ItemPlacement>)>,
+    monsters_change: Option<(Vec<MonsterPlacement>, Vec<MonsterPlacement>)>,
+    events_change: Option<(Vec<crate::event::EventDef>, Vec<crate::event::EventDef>)>,
 }
 
 struct Stroke {
@@ -140,6 +149,16 @@ pub struct EditorState {
     pub rename_buf: String,
     /// Whether the Japanese egui font has been installed on this context yet.
     pub fonts_installed: bool,
+    /// Whether the map tab shows the 3D walk view (plan9.5).
+    pub mode_3d: bool,
+    /// Cells whose terrain the 3D view must rebuild (drained by `edit3d`).
+    pub d3_terrain_dirty: Vec<GridPos>,
+    /// The 3D view must respawn its placement markers.
+    pub d3_markers_dirty: bool,
+    /// The 3D view must fully rebuild (level switch / undo / redo).
+    pub d3_full: bool,
+    /// The 3D walker's coordinate/facing readout (shown in the top bar).
+    pub d3_coord: String,
     /// Whether anything is unsaved (Save All writes everything).
     dirty: bool,
     // Map Undo/Redo (per level; cleared on level switch).
@@ -173,6 +192,11 @@ impl EditorState {
             warnings: Vec::new(),
             rename_buf: String::new(),
             fonts_installed: false,
+            mode_3d: false,
+            d3_terrain_dirty: Vec::new(),
+            d3_markers_dirty: false,
+            d3_full: false,
+            d3_coord: String::new(),
             dirty: false,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -307,6 +331,7 @@ impl EditorState {
         }
         self.stroke.as_mut().unwrap().before.entry((x, y)).or_insert(before);
         self.cur_mut().level.floors[floor].blocks[idx] = selected;
+        self.d3_terrain_dirty.push(GridPos::new(x, y, floor));
     }
 
     pub fn end_stroke(&mut self) {
@@ -323,7 +348,7 @@ impl EditorState {
             }
         }
         if !cells.is_empty() {
-            self.push_op(EditOp { cells, start_change: None });
+            self.push_op(EditOp { cells, ..Default::default() });
         }
     }
 
@@ -348,7 +373,7 @@ impl EditorState {
             StartPlacement { pos: GridPos::new(x, y, floor), facing: before.facing }
         };
         self.apply_start(after);
-        self.push_op(EditOp { cells: Vec::new(), start_change: Some((before, after)) });
+        self.push_op(EditOp { start_change: Some((before, after)), ..Default::default() });
     }
 
     fn apply_start(&mut self, sp: StartPlacement) {
@@ -376,10 +401,24 @@ impl EditorState {
         if let Some((before, after)) = &op.start_change {
             self.apply_start(if forward { *after } else { *before });
         }
+        if let Some((before, after)) = &op.items_change {
+            self.cur_mut().items = if forward { after.clone() } else { before.clone() };
+            self.d3_markers_dirty = true;
+        }
+        if let Some((before, after)) = &op.monsters_change {
+            self.cur_mut().monsters = if forward { after.clone() } else { before.clone() };
+            self.d3_markers_dirty = true;
+        }
+        if let Some((before, after)) = &op.events_change {
+            self.cur_mut().events = if forward { after.clone() } else { before.clone() };
+            self.d3_markers_dirty = true;
+            self.recompute_warnings();
+        }
     }
 
     /// Undo the active tab's stack.
     pub fn undo(&mut self) {
+        self.d3_full = true;
         if self.tab != Tab::Map {
             self.content_undo();
             return;
@@ -395,6 +434,7 @@ impl EditorState {
     }
 
     pub fn redo(&mut self) {
+        self.d3_full = true;
         if self.tab != Tab::Map {
             self.content_redo();
             return;
@@ -418,6 +458,7 @@ impl EditorState {
         self.undo.clear();
         self.redo.clear();
         self.stroke = None;
+        self.d3_full = true;
     }
 
     pub fn select_floor(&mut self, floor: usize) {
@@ -437,27 +478,40 @@ impl EditorState {
                 if self.place_item.is_empty() {
                     return;
                 }
-                self.snapshot();
                 let id = self.place_item.clone();
+                let before = self.cur().items.clone();
                 let lvl = self.cur_mut();
                 lvl.items.retain(|p| !(p.x == x && p.y == y && p.floor == floor));
                 lvl.items.push(ItemPlacement { id, x, y, floor });
+                let after = self.cur().items.clone();
+                if after != before {
+                    self.push_op(EditOp { items_change: Some((before, after)), ..Default::default() });
+                }
+                self.d3_markers_dirty = true;
             }
             PlaceLayer::Monster => {
                 if self.place_monster.is_empty() {
                     return;
                 }
-                self.snapshot();
                 let id = self.place_monster.clone();
+                let before = self.cur().monsters.clone();
                 let lvl = self.cur_mut();
                 lvl.monsters.retain(|p| !(p.x == x && p.y == y && p.floor == floor));
                 lvl.monsters.push(MonsterPlacement { id, x, y, floor, facing: Facing::North });
+                let after = self.cur().monsters.clone();
+                if after != before {
+                    self.push_op(EditOp { monsters_change: Some((before, after)), ..Default::default() });
+                }
+                self.d3_markers_dirty = true;
             }
             PlaceLayer::Trigger => {
-                self.snapshot();
                 let block = self.place_trigger;
                 let w = self.cur().width();
+                let before_block = self.cur().level.floors[floor].blocks[y as usize * w + x as usize];
+                let before_events = self.cur().events.clone();
                 self.cur_mut().level.floors[floor].blocks[y as usize * w + x as usize] = block;
+                self.d3_terrain_dirty.push(GridPos::new(x, y, floor));
+                self.d3_markers_dirty = true;
                 // Auto-create an empty event template at this coordinate.
                 let already = self.cur().events.iter().any(|e| e.at == (x, y, floor));
                 if !already {
@@ -476,6 +530,17 @@ impl EditorState {
                         actions: Vec::new(),
                     });
                 }
+                // One op = block + template, so a single undo removes both.
+                let cells = if before_block == block {
+                    Vec::new()
+                } else {
+                    vec![(GridPos::new(x, y, floor), before_block, block)]
+                };
+                let events_change = (self.cur().events != before_events)
+                    .then(|| (before_events, self.cur().events.clone()));
+                if !cells.is_empty() || events_change.is_some() {
+                    self.push_op(EditOp { cells, events_change, ..Default::default() });
+                }
                 self.recompute_warnings();
             }
         }
@@ -487,17 +552,36 @@ impl EditorState {
         let floor = self.floor_index;
         match self.place_layer {
             PlaceLayer::Block | PlaceLayer::Trigger => {
-                self.snapshot();
                 let w = self.cur().width();
+                let before = self.cur().level.floors[floor].blocks[y as usize * w + x as usize];
+                if before == Block::Empty {
+                    return;
+                }
                 self.cur_mut().level.floors[floor].blocks[y as usize * w + x as usize] = Block::Empty;
+                self.push_op(EditOp {
+                    cells: vec![(GridPos::new(x, y, floor), before, Block::Empty)],
+                    ..Default::default()
+                });
+                self.d3_terrain_dirty.push(GridPos::new(x, y, floor));
+                self.d3_markers_dirty = true;
             }
             PlaceLayer::Item => {
-                self.snapshot();
+                let before = self.cur().items.clone();
                 self.cur_mut().items.retain(|p| !(p.x == x && p.y == y && p.floor == floor));
+                if self.cur().items.len() != before.len() {
+                    let after = self.cur().items.clone();
+                    self.push_op(EditOp { items_change: Some((before, after)), ..Default::default() });
+                }
+                self.d3_markers_dirty = true;
             }
             PlaceLayer::Monster => {
-                self.snapshot();
+                let before = self.cur().monsters.clone();
                 self.cur_mut().monsters.retain(|p| !(p.x == x && p.y == y && p.floor == floor));
+                if self.cur().monsters.len() != before.len() {
+                    let after = self.cur().monsters.clone();
+                    self.push_op(EditOp { monsters_change: Some((before, after)), ..Default::default() });
+                }
+                self.d3_markers_dirty = true;
             }
         }
     }
@@ -533,6 +617,7 @@ impl EditorState {
         self.proj.level_paths.push(format!("levels/level{n:02}.ron"));
         self.proj.levels.push(data);
         self.status = format!("added level {n}");
+        self.d3_full = true;
         self.recompute_warnings();
     }
 
@@ -553,6 +638,7 @@ impl EditorState {
         } else {
             format!("deleted level {index} — 注意: {}", warns.join("; "))
         };
+        self.d3_full = true;
         self.recompute_warnings();
     }
 
@@ -604,10 +690,17 @@ pub fn run(project: Project) {
     .add_systems(Startup, setup_editor_camera);
 
     if let Some(tab) = debug_shot::editor_shot_tab() {
-        // Verification: render a given tab into an image and capture it.
+        // Verification: render a given egui tab into an image and capture it.
         shot::setup(&mut app, tab);
     } else {
+        // Interactive editor (and the editor-3d Bevy-screenshot scene): the 2D
+        // egui editor plus the 3D walk mode (plan9.5).
+        edit3d::register(&mut app);
+        app.add_systems(Startup, edit3d_setup_resources);
         app.add_systems(Update, ui::editor_ui_window);
+        if debug_shot::wants_editor_3d() {
+            app.add_systems(Update, edit3d::edit3d_shot_driver);
+        }
     }
 
     app.run();
@@ -615,6 +708,24 @@ pub fn run(project: Project) {
 
 fn setup_editor_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
+}
+
+/// Build the 3D-edit palette + the `Dungeon` mirror (from level 0) at startup.
+fn edit3d_setup_resources(
+    mut commands: Commands,
+    state: Res<EditorState>,
+    asset_server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let palette = crate::render::build_palette(&asset_server, &mut meshes, &mut materials);
+    commands.insert_resource(palette);
+    let lvl = &state.proj.levels[0];
+    commands.insert_resource(Dungeon {
+        level: lvl.level.clone(),
+        start_pos: lvl.start,
+        start_facing: lvl.start_facing,
+    });
 }
 
 #[cfg(test)]
@@ -699,6 +810,75 @@ mod tests {
         assert_eq!(s.cur().start_facing, Facing::North);
         s.undo();
         assert_eq!(s.cur().start, GridPos::new(0, 0, 1));
+    }
+
+    #[test]
+    fn trigger_place_is_one_undo_op() {
+        // Keyhole placement = block + auto event template; one Map-tab undo
+        // must remove both (they ride the same EditOp, not a content snapshot).
+        let mut s = EditorState::new(two_floor_project());
+        s.floor_index = 1;
+        s.place_layer = PlaceLayer::Trigger;
+        s.place_trigger = Block::Keyhole;
+        s.place_at(1, 1);
+        assert_eq!(s.block_at(1, 1), Some(Block::Keyhole));
+        assert_eq!(s.cur().events.len(), 1);
+        s.undo();
+        assert_eq!(s.block_at(1, 1), Some(Block::Empty));
+        assert!(s.cur().events.is_empty());
+        s.redo();
+        assert_eq!(s.block_at(1, 1), Some(Block::Keyhole));
+        assert_eq!(s.cur().events.len(), 1);
+    }
+
+    #[test]
+    fn item_place_and_erase_undo_from_map_tab() {
+        let mut s = EditorState::new(two_floor_project());
+        s.floor_index = 1;
+        s.place_layer = PlaceLayer::Item;
+        s.place_item = "potion".to_string();
+        s.place_at(1, 1);
+        assert_eq!(s.cur().items.len(), 1);
+        s.erase_at(1, 1);
+        assert!(s.cur().items.is_empty());
+        s.undo(); // undo the erase
+        assert_eq!(s.cur().items.len(), 1);
+        s.undo(); // undo the placement
+        assert!(s.cur().items.is_empty());
+    }
+
+    #[test]
+    fn walk_front_place_matches_2d_edit() {
+        // plan9.5: the 3D place path (EditWalk::front → place_at/end_stroke,
+        // exactly what edit3d_place calls) must produce the same LevelData as
+        // clicking the same cell in the 2D grid, and share its undo stack.
+        let mut s3 = EditorState::new(two_floor_project());
+        s3.floor_index = 1;
+        s3.selected = Block::Wall;
+        let w = walk::EditWalk::new(GridPos::new(1, 1, 1), Facing::East);
+        let front = w.front();
+        assert_eq!(front, GridPos::new(2, 1, 1));
+        s3.place_at(front.x, front.y);
+        s3.end_stroke();
+        assert!(s3.d3_terrain_dirty.contains(&front));
+
+        let mut s2 = EditorState::new(two_floor_project());
+        s2.floor_index = 1;
+        s2.selected = Block::Wall;
+        s2.paint(2, 1);
+        s2.end_stroke();
+        assert_eq!(s3.cur().level, s2.cur().level);
+
+        // Erase parity, then undo through the common stacks: both routes must
+        // keep producing identical levels.
+        s3.erase_at(front.x, front.y);
+        s2.erase_at(2, 1);
+        assert_eq!(s3.cur().level, s2.cur().level);
+        assert_eq!(s3.block_at(2, 1), Some(Block::Empty));
+        s3.undo();
+        s2.undo();
+        assert_eq!(s3.cur().level, s2.cur().level);
+        assert!(s3.d3_full, "undo must trigger a full 3D rebuild");
     }
 
     #[test]

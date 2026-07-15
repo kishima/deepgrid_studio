@@ -161,3 +161,19 @@ pub struct EditWalk { pub pos: GridPos, pub facing: Facing, /* 補間用 */ }
   検討(まず計測)。
 - `ClusterConfig::Single` は3Dエディットカメラにも適用(ライトを置く場合)。
   基本はプレイと同じ AmbientLight+ヘッドランプ構成を流用する。
+
+## 実装状況(2026-07-15 検証済み)
+
+- 計画どおり実装(walk.rs / edit3d.rs 新設、editor::run 拡張、editor-3d
+  シーン)。clippy 警告ゼロ、cargo test 59件、autotest 43ステップ、
+  editor-3d / editor-map / プレイシーンの撮影・目視まで全通過。
+- 計画外の改善: マップタブの Undo に配置リスト(アイテム/モンスター/
+  イベント雛形)の before→after も載せた。従来スナップショット頼みだった
+  配置編集が、2D/3D 共通の EditOp で undo/redo できる
+  (`trigger_place_is_one_undo_op` 等のテストで担保)。
+- 統合時の差し戻し: 手動受け入れテストの Save All で sample プロジェクトの
+  RON 全ファイルが再シリアライズされていた(コメント消失+テスト編集の
+  残骸: floor2 の鍵穴雛形・壁数個・壁内モンスター配置など)。定義4ファイル
+  は意味的に無変更と確認の上、assets/projects/sample/ を全て HEAD に復元
+  した(受け入れ基準4は「増築できること」の確認であり、結果の commit は
+  不要)。

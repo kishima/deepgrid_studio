@@ -80,7 +80,14 @@ pub fn debug_shot_enabled() -> bool {
 /// capture lives in `editor::shot` (egui on the window isn't captured by Bevy
 /// screenshots).
 pub fn wants_editor() -> bool {
-    editor_shot_tab().is_some()
+    editor_shot_tab().is_some() || wants_editor_3d()
+}
+
+/// Whether the requested scene is the 3D-edit-mode Bevy screenshot
+/// (`DEEPGRID_DEBUG_SHOT=editor-3d`, plan9.5). Handled outside `editor_shot_tab`
+/// because it captures the 3D view via Bevy's `Screenshot`, not the egui image.
+pub fn wants_editor_3d() -> bool {
+    debug_shot_value().as_deref() == Some("editor-3d")
 }
 
 /// Which editor tab a `DEEPGRID_DEBUG_SHOT=editor[-tab]` scene opens, or `None`

@@ -289,14 +289,30 @@ fn map_view(ctx: &egui::Context, state: &mut EditorState) {
                 state.delete_level(idx);
             }
             ui.separator();
-            let lvl = state.cur();
-            ui.label(format!("配置: アイテム {} / モンスター {}", lvl.items.len(), lvl.monsters.len()));
+            // 2D / 3D toggle (plan9.5).
+            let mut mode_3d = state.mode_3d;
+            ui.selectable_value(&mut mode_3d, false, "2D");
+            ui.selectable_value(&mut mode_3d, true, "3D");
+            state.mode_3d = mode_3d;
+            if state.mode_3d {
+                ui.separator();
+                ui.label(format!("視点 {}", state.d3_coord));
+                ui.label("WASD/QE歩行 R/F昇降 左設置/右消去");
+            } else {
+                ui.separator();
+                let lvl = state.cur();
+                ui.label(format!("配置: アイテム {} / モンスター {}", lvl.items.len(), lvl.monsters.len()));
+            }
         });
     });
 
-    egui::CentralPanel::default().show(ctx, |ui| {
-        grid(ui, state);
-    });
+    // In 3D mode the central area shows the 3D walk view (drawn by Bevy under
+    // egui); skip the 2D grid so the transparent egui centre reveals it.
+    if !state.mode_3d {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            grid(ui, state);
+        });
+    }
 }
 
 fn grid(ui: &mut egui::Ui, state: &mut EditorState) {
