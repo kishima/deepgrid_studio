@@ -38,6 +38,7 @@ DeepGrid Studio は2つの顔を持つ:
 | plan10 | **完了** | 演出と仕上げ第1弾: デモ(OP/ED/中間)、BGM・効果音(フロアごとのBGM選択)、テクスチャ/グラフィック差し替え機構(顔・アイテム・魔法シンボル等)、セーブ/ロード → [plan10.md](plan10.md) |
 | plan11 | **完了** | 配布と品質: タイトル画面、作ったゲームの配布形式(ランタイム+プロジェクト同梱)、Windows ネイティブ GPU 実行、パフォーマンス調整 → [plan11.md](plan11.md) |
 | plan12 | **完了** | **Bevy States への全面移行(機能追加なし)**: 画面遷移(タイトル/デモ/プレイ)を `GameScreen` States に統一。DataScreen は「世界が進み続けるプレイ中オーバーレイ」なのでリソースのまま(`ActiveScreen::Data` は導出値)。`bevy_state` feature 有効化。verify-all.sh 全35項目 PASS(autotest 49ステップ・シーン29種は増減なし)、title/demo/1 目視一致 → [plan12.md](plan12.md)「実装状況」 |
+| plan13 | **次** | **統合アプリ(第2期初手)**: エディター⇔プレイを1プロセス・1ウィンドウで行き来。`GameScreen::Editor` 追加、タイトルに「エディター」(play_only では非表示)、未保存編集のままテストプレイ(F5 往復・セーブ無効・使い捨て世界)、Project→ランタイム導出の関数化。egui/bevy_ui の住み分けは継続 → [plan13.md](plan13.md) |
 
 ## 第2期(第1期=plan11 完了後の候補)
 
