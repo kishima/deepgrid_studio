@@ -1,6 +1,9 @@
-//! Title screen (plan11): a full-screen bevy_ui overlay gated by [`TitleState`]
-//! — the same resource-gate pattern as `DemoState` (States migration is plan12;
-//! the priority rule lives in [`crate::screen::active_screen`]).
+//! Title screen (plan11): a full-screen bevy_ui overlay shown while
+//! [`GameScreen::Title`] is the active state (plan12). [`TitleState`] now only
+//! carries the menu's *data* (selection, sub-screen, banners); whether the
+//! title is up is the state, and transitions go through `NextState<GameScreen>`.
+//! The overlay is (re)built by [`sync_title_ui`] while in the state and torn
+//! down by [`teardown_title`] on `OnExit(Title)`.
 //!
 //! Menu (keyboard ↑↓/Enter/Esc + mouse, both complete):
 //! はじめから / つづきから (slots with timestamps) / 設定 (live `UserSettings`
@@ -21,6 +24,7 @@ use crate::demo::{DemoCatalog, StartDemoReq};
 use crate::dungeon::{Facing, GridPos};
 use crate::project::ProjectCard;
 use crate::save::{self, LoadRequest};
+use crate::screen::GameScreen;
 use crate::settings::{BINDABLE_KEYS, GameAction, Keybinds, UserSettings, key_name};
 
 const FONT_REGULAR: &str = "fonts/PixelMplus12-Regular.ttf";
@@ -73,10 +77,10 @@ pub struct Row {
     pub kind: RowKind,
 }
 
-/// The title overlay gate + all its UI state.
+/// The title menu's UI state. Whether the title is *showing* is the
+/// [`GameScreen::Title`] state (plan12); this resource only holds the menu data.
 #[derive(Resource, Default)]
 pub struct TitleState {
-    pub active: bool,
     pub screen: TitleScreen,
     pub sel: usize,
     pub rows: Vec<Row>,
@@ -103,7 +107,6 @@ pub struct TitleState {
 
 impl TitleState {
     pub fn new(
-        active: bool,
         playable: bool,
         error: Option<String>,
         game_title: String,
@@ -111,7 +114,6 @@ impl TitleState {
         game_desc: String,
     ) -> Self {
         Self {
-            active,
             playable,
             error,
             game_title,
@@ -122,10 +124,10 @@ impl TitleState {
         }
     }
 
-    /// (Re)open the title on its main screen — used by the ED demo (plan11) and
-    /// anything else that returns to the title.
+    /// Reset the menu to its main screen — used by the ED demo (plan11) and
+    /// anything else returning to the title. The caller drives the actual
+    /// transition with `NextState(GameScreen::Title)` (plan12).
     pub fn open(&mut self) {
-        self.active = true;
         self.screen = TitleScreen::Main;
         self.sel = 0;
         self.rows.clear();
@@ -180,6 +182,8 @@ pub struct TitleActions<'w> {
     pub start_demo: EventWriter<'w, StartDemoReq>,
     pub load: EventWriter<'w, LoadRequest>,
     pub exit: EventWriter<'w, AppExit>,
+    /// Screen transitions out of the title (plan12).
+    pub next_screen: ResMut<'w, NextState<GameScreen>>,
 }
 
 // ------------------------------------------------------------------ rows
@@ -342,9 +346,12 @@ fn activate(state: &mut TitleState, acts: &mut TitleActions, kind: RowKind) {
         RowKind::Start => {
             acts.reset.send(ResetRunReq);
             if acts.demos.0.iter().any(|d| d.id == "op") {
+                // The OP demo plays first; `start_demo` performs the
+                // Title → Demo transition once it has actually set the demo up.
                 acts.start_demo.send(StartDemoReq("op".to_string()));
+            } else {
+                acts.next_screen.set(GameScreen::Playing);
             }
-            state.active = false;
             state.dirty = true;
         }
         RowKind::Continue => state.goto(TitleScreen::Continue),
@@ -376,7 +383,7 @@ fn activate(state: &mut TitleState, acts: &mut TitleActions, kind: RowKind) {
         }
         RowKind::Slot(slot) => {
             acts.load.send(LoadRequest(slot));
-            state.active = false;
+            acts.next_screen.set(GameScreen::Playing);
             state.dirty = true;
         }
         RowKind::BgmVolume => adjust(state, acts, kind, 1),
@@ -480,11 +487,6 @@ pub fn drive_title(
     mut state: ResMut<TitleState>,
     mut acts: TitleActions,
 ) {
-    if !state.active {
-        wheel.clear();
-        return;
-    }
-
     // A key-rebind is armed: the next bindable key takes it (Esc cancels).
     if let Some(i) = state.rebind {
         if keys.just_pressed(KeyCode::Escape) {
@@ -581,9 +583,6 @@ pub fn title_buttons(
     mut acts: TitleActions,
     items: Query<(&Interaction, &TitleItem), Changed<Interaction>>,
 ) {
-    if !state.active {
-        return;
-    }
     for (interaction, item) in &items {
         let Some(row) = state.rows.get(item.0) else { continue };
         if !row.enabled {
@@ -606,21 +605,17 @@ pub fn title_buttons(
     }
 }
 
-/// Rebuild the overlay whenever the state is dirty (menus are tiny; a full
+/// Rebuild the overlay whenever the menu data is dirty (menus are tiny; a full
 /// rebuild per change is simpler than incremental updates and plenty fast).
+/// Runs only while in [`GameScreen::Title`]; the first frame after entering
+/// finds an empty overlay and builds it, and [`teardown_title`] removes it on
+/// exit.
 pub fn sync_title_ui(
     mut commands: Commands,
     mut state: ResMut<TitleState>,
     asset_server: Res<AssetServer>,
     overlay: Query<Entity, With<TitleOverlay>>,
 ) {
-    if !state.active {
-        state.dirty = true; // rebuild on the next open
-        for e in &overlay {
-            commands.entity(e).despawn_recursive();
-        }
-        return;
-    }
     if !state.dirty && !overlay.is_empty() {
         return;
     }
@@ -814,6 +809,19 @@ pub fn sync_title_ui(
             TextColor(dim),
         ));
     });
+}
+
+/// Tear the overlay down when leaving the title (plan12, `OnExit(Title)`), and
+/// arm a rebuild so re-entering the title builds a fresh overlay.
+pub fn teardown_title(
+    mut commands: Commands,
+    mut state: ResMut<TitleState>,
+    overlay: Query<Entity, With<TitleOverlay>>,
+) {
+    for e in &overlay {
+        commands.entity(e).despawn_recursive();
+    }
+    state.dirty = true;
 }
 
 // ------------------------------------------------------------------ reset

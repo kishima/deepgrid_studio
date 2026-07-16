@@ -153,3 +153,46 @@
   なった時点でそれは挙動変更 — 原因を直す)。
 - 新規ファイルを含むコミットでは git status を確認し、並行作業の
   ステージ済み変更を巻き込まないこと。
+
+## 実装状況(2026-07-17 完了)
+
+`GameScreen` States(`Title`/`Demo`/`Playing`)へ移行。`screen.rs` は States 前提に
+書き換え、`ActiveScreen::Data` は「`Playing` かつ `data.open`」の導出値として存続。
+`CurrentScreen` SystemParam を `State<GameScreen>`+`DataScreen` 実装に差し替えた
+ことで、消費側の `tick_clock` / `keyconfig_input` は**無修正**(抽象がState化を吸収)。
+`player_movement` のみ `Res<State<GameScreen>>` 直読みに変更(ActionEvents から
+title/demo を外し screen を追加。パラメータ数は16のまま)。`bevy_state` feature を
+Cargo.toml に追加(0.15 の feature 有効化。バージョン更新ではない)。
+
+`TitleState.active` を削除(菜単データのみ保持)。タイトルUIは
+`sync_title_ui.run_if(in_state(Title))` で構築/再構築、`OnExit(Title)=teardown_title`
+で破棄。`DemoState.active` は再生**進行データ**として存続(gate ではない)。デモ
+overlay は `start_demo` が生成(`NextState(Demo)` の唯一の権限者)、
+`OnExit(Demo)=teardown_demo` で破棄。
+
+### 遅延遷移の監査リスト(全5項目 確認済み)
+
+1. **はじめから → デモ/プレイ**: `activate` は OP デモありなら `StartDemoReq` を
+   送るのみ(`start_demo` が実セットアップ後に `NextState(Demo)`)。OP 無しは
+   `NextState(Playing)` 直行。1フレームに Title→Demo の二重 NextState は書かない。
+   → **State 化で1フレーム余分にクロック凍結が延びるが観測不能**(autotest PASS)。
+2. **drive_demo クローズ**: 通常→`NextState(Playing)` / `"ed"`→`ResetRunReq`+
+   `title.open()`+`NextState(Title)`。`apply_reset` は**ungated**(ResetRunReq
+   駆動)で同フレームに世界を再構築、`clock.restore(0)`。State は Demo のまま
+   凍結が続くので余計なクロック進行なし。overlay 破棄は `OnExit(Demo)`。
+3. **つづきから(ロード)→ Playing**: `activate(Slot)` が `LoadRequest`+
+   `NextState(Playing)`。`handle_load` は同フレーム(`drive_title.before(handle_load)`)
+   で世界を再構築。State は次フレームで Playing。autotest step49 PASS。
+4. **壊れたプロジェクトのフォールバック**: 初期状態 `insert_state(Title)` で
+   起動(遷移なし)。エラーバナーは `TitleState.error`(リソース側)。verify-all の
+   export play_only run(`title` shot)で確認。
+5. **autotest キー注入**: `run_title` は従来どおり `.before(drive_title)
+   .before(start_demo)` で注入 → 同フレームに消費される。`title.active` 参照は
+   `State<GameScreen>` 読みに置換。step45(手動でデモを閉じる)は `NextState(Playing)`
+   も併せて書く(閉じ機構が State 追加になったための機械的追随)。全ステップ PASS。
+
+### 見送り(記録のみ)
+
+- タイトル overlay の破棄タイミングが `OnExit(Title)` になったことで、メニュー操作
+  フレームの1フレーム後に消える(旧: 同フレーム)。1フレームの視覚差で挙動不変の
+  許容範囲。改善するなら plan13 以降で `OnEnter`/`OnExit` に UI 構築も寄せる。

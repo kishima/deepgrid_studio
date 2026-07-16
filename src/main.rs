@@ -285,13 +285,20 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
         facing: project.levels[0].start_facing,
     };
     let title_state = title::TitleState::new(
-        launch.show_title,
         launch.load_error.is_none(),
         launch.load_error,
         project.name.clone(),
         project.author.clone(),
         project.description.clone(),
     );
+    // plan12: the title/demo/play screens are a Bevy `State`. A normal launch
+    // opens on the title; unattended verification and `--load` start in Playing
+    // (exactly as the pre-plan12 `TitleState.active` flag decided).
+    let initial_screen = if launch.show_title {
+        screen::GameScreen::Title
+    } else {
+        screen::GameScreen::Playing
+    };
     let catalog = project.build_catalog();
     let monster_catalog = project.build_monster_catalog();
     let magic_catalog = project.build_magic_catalog();
@@ -337,7 +344,8 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
     .init_resource::<demo::DemoState>()
     .insert_resource(demo::DemoCatalog(project.demos.clone()))
     .insert_resource(save::PendingCliLoad(load_slot))
-    // plan11: title screen + run reset.
+    // plan11: title screen + run reset. plan12: the screen is a Bevy `State`.
+    .insert_state(initial_screen)
     .insert_resource(title_state)
     .insert_resource(title::PlayOnly(launch.play_only))
     .insert_resource(initial_run)
@@ -519,27 +527,41 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
                 .before(audio::play_se),
             demo::debug_demo_driver,
             demo::start_demo.after(event::run_events).after(demo::debug_demo_driver),
-            demo::drive_demo.after(demo::start_demo),
+            demo::drive_demo
+                .after(demo::start_demo)
+                .run_if(in_state(screen::GameScreen::Demo)),
         ),
     )
+    .add_systems(OnExit(screen::GameScreen::Demo), demo::teardown_demo)
     // plan11: title screen. Menu actions run before the reset/load/demo systems
     // that consume their events this same frame; the reset rebuilds through the
     // normal level transition.
+    // plan11: title screen. drive_title / title_buttons / sync_title_ui only run
+    // while in the Title state (plan12); apply_reset stays ungated — it is
+    // event-driven (ResetRunReq) and fires while transitioning out of Demo.
     .add_systems(
         Update,
         (
-            title::drive_title.before(demo::start_demo).before(save::handle_load),
+            title::drive_title
+                .before(demo::start_demo)
+                .before(save::handle_load)
+                .run_if(in_state(screen::GameScreen::Title)),
             title::title_buttons
                 .after(title::drive_title)
                 .before(demo::start_demo)
-                .before(save::handle_load),
+                .before(save::handle_load)
+                .run_if(in_state(screen::GameScreen::Title)),
             title::apply_reset
                 .after(title::title_buttons)
                 .after(demo::drive_demo)
                 .before(world::level_transition),
-            title::sync_title_ui.after(title::title_buttons).after(demo::drive_demo),
+            title::sync_title_ui
+                .after(title::title_buttons)
+                .after(demo::drive_demo)
+                .run_if(in_state(screen::GameScreen::Title)),
         ),
     )
+    .add_systems(OnExit(screen::GameScreen::Title), title::teardown_title)
     .add_systems(
         Update,
         (

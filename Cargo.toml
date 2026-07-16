@@ -22,6 +22,9 @@ bevy = { version = "0.15", default-features = false, features = [
     "bevy_pbr",
     "bevy_scene",
     "bevy_gltf",
+    # plan12: Bevy States (GameScreen: Title/Demo/Playing). Off by default under
+    # default-features = false; the screen-transition machinery needs it.
+    "bevy_state",
     # plan4: main-screen HUD (status/message windows) via bevy_ui.
     # egui stays editor-only because bevy_egui draws to the window and isn't
     # captured by Bevy's Screenshot (plan3 Step 6 / plan4 rationale).

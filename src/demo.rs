@@ -1,17 +1,21 @@
 //! Demos (plan10): full-screen message-scroll cutscenes (OP / ED / mid-game),
 //! authored in `demos.ron` and started by the `StartDemo` event action.
 //!
-//! Playback freezes game time: `tick_clock` emits no `CycleTick` while
-//! [`DemoState::playing`], which stops monsters / hazards / queued events, and
-//! `player_movement` ignores input. The overlay is bevy_ui (so the `demo` debug
-//! shot captures it). Click / Space advance a line early; Escape skips to the
+//! Playback is the [`GameScreen::Demo`] state (plan12): while it is active
+//! `tick_clock` emits no `CycleTick` (stopping monsters / hazards / queued
+//! events) and `player_movement` ignores input. [`DemoState`] carries only the
+//! playback *progress*; `start_demo` performs the transition *into* Demo (from
+//! Title or Playing) and `drive_demo` the transition out. The overlay is bevy_ui
+//! (so the `demo` debug shot captures it) and is torn down by [`teardown_demo`]
+//! on `OnExit(Demo)`. Click / Space advance a line early; Escape skips to the
 //! end. After the last line an "— END —" marker waits for one input, then the
-//! overlay closes and play resumes (the title screen replaces this in plan11).
+//! overlay closes and play resumes (or, for the ED demo, the title reopens).
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::audio::BgmState;
+use crate::screen::GameScreen;
 
 /// Seconds a line stays before auto-advancing.
 const LINE_SECS: f32 = 2.5;
@@ -74,7 +78,9 @@ pub struct DemoOverlay;
 #[derive(Component)]
 pub struct DemoText;
 
-/// Start requested demos: set up [`DemoState`], swap the BGM, spawn the overlay.
+/// Start requested demos: set up [`DemoState`], swap the BGM, spawn the overlay,
+/// and enter the Demo screen.
+#[allow(clippy::too_many_arguments)]
 pub fn start_demo(
     mut commands: Commands,
     mut reqs: EventReader<StartDemoReq>,
@@ -82,6 +88,7 @@ pub fn start_demo(
     mut state: ResMut<DemoState>,
     mut bgm: ResMut<BgmState>,
     mut log: ResMut<crate::hud::MessageLog>,
+    mut next_screen: ResMut<NextState<GameScreen>>,
     existing: Query<Entity, With<DemoOverlay>>,
 ) {
     let Some(req) = reqs.read().last() else { return };
@@ -104,6 +111,10 @@ pub fn start_demo(
         at_end: def.lines.is_empty(),
         prev_override,
     });
+    // Enter the Demo screen (from Title on「はじめから」, or from Playing on a
+    // mid-game StartDemo event). start_demo is the sole authority for this
+    // transition, so it can only ever fire when a demo was actually set up.
+    next_screen.set(GameScreen::Demo);
     let (r, g, b) = def.bg_color;
     commands
         .spawn((
@@ -139,7 +150,6 @@ pub fn start_demo(
 /// provisional "game clear"); every other demo resumes play.
 #[allow(clippy::too_many_arguments)]
 pub fn drive_demo(
-    mut commands: Commands,
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mouse: Res<ButtonInput<MouseButton>>,
@@ -148,15 +158,15 @@ pub fn drive_demo(
     mut bgm: ResMut<BgmState>,
     mut title: ResMut<crate::title::TitleState>,
     mut reset: EventWriter<crate::title::ResetRunReq>,
-    overlay: Query<Entity, With<DemoOverlay>>,
+    mut next_screen: ResMut<NextState<GameScreen>>,
     mut text: Query<&mut Text, With<DemoText>>,
 ) {
     let Some(active) = &mut state.active else { return };
     let Some(def) = catalog.0.iter().find(|d| d.id == active.id) else {
+        // Demo id vanished from the catalog: resume play (the overlay is torn
+        // down on OnExit(Demo)).
         state.active = None;
-        for e in &overlay {
-            commands.entity(e).despawn_recursive();
-        }
+        next_screen.set(GameScreen::Playing);
         return;
     };
     let advance = keys.just_pressed(KeyCode::Space) || mouse.just_pressed(MouseButton::Left);
@@ -169,12 +179,12 @@ pub fn drive_demo(
             let was_ed = active.id == "ed";
             bgm.override_track = active.prev_override.clone();
             state.active = None;
-            for e in &overlay {
-                commands.entity(e).despawn_recursive();
-            }
             if was_ed {
                 reset.send(crate::title::ResetRunReq);
                 title.open();
+                next_screen.set(GameScreen::Title);
+            } else {
+                next_screen.set(GameScreen::Playing);
             }
             return;
         }
@@ -205,6 +215,15 @@ pub fn drive_demo(
             s.push_str("— END —");
         }
         **t = s;
+    }
+}
+
+/// Tear the overlay down when leaving demo playback (plan12, `OnExit(Demo)`).
+/// `drive_demo` / the autotest close paths clear `DemoState` and drive the
+/// transition; the overlay entity is removed here.
+pub fn teardown_demo(mut commands: Commands, overlay: Query<Entity, With<DemoOverlay>>) {
+    for e in &overlay {
+        commands.entity(e).despawn_recursive();
     }
 }
 

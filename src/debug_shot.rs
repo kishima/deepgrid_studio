@@ -35,8 +35,8 @@ fn scene_script(value: &str) -> VecDeque<Command> {
         // plan8 gimmick scenes: the driver teleports to a viewpoint on the
         // autotest fixtures once the world settles (no scripted movement).
         "plate" | "warp" | "stairs" | "hole" => vec![],
-        // plan11: the title overlay is up (main.rs keeps the title active for
-        // this one debug-shot scene); nothing to script.
+        // plan11: the title overlay is up (main.rs starts this one debug-shot
+        // scene in GameScreen::Title, plan12); nothing to script.
         "title" => vec![],
         // Step up to the sentinel and attack it (shows a combat message).
         "combat" => vec![Move(TurnRight), Move(Forward), Attack],

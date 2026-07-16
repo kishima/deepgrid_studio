@@ -1524,6 +1524,8 @@ pub struct GimmickRefs<'w, 's> {
     // plan10 additions (steps 44–47).
     pub bgm: ResMut<'w, crate::audio::BgmState>,
     pub demo: ResMut<'w, crate::demo::DemoState>,
+    /// plan12: closing the demo by hand (step 45) must also leave the Demo state.
+    pub next_screen: ResMut<'w, NextState<crate::screen::GameScreen>>,
     pub rng: ResMut<'w, crate::rng::GameRng>,
     pub settings: ResMut<'w, crate::settings::UserSettings>,
     pub save_req: EventWriter<'w, crate::save::SaveRequest>,
@@ -2016,10 +2018,12 @@ pub fn run_gimmick(
                         fail(&t, "demo-start-skip", "デモ中にサイクルが進んだ".into(), &mut exit);
                         return;
                     }
-                    // Close it the way Escape+input would (restore BGM, drop overlay).
+                    // Close it the way Escape+input would (restore BGM, drop
+                    // overlay, leave the Demo state so the clock resumes).
                     let prev = refs.demo.active.as_ref().and_then(|a| a.prev_override.clone());
                     refs.bgm.override_track = prev;
                     refs.demo.active = None;
+                    refs.next_screen.set(crate::screen::GameScreen::Playing);
                     for e in &refs.demo_overlays {
                         commands.entity(e).despawn_recursive();
                     }
@@ -2144,6 +2148,7 @@ pub fn run_title(
     mut demo_req: EventWriter<crate::demo::StartDemoReq>,
     demo: Res<crate::demo::DemoState>,
     title: Res<crate::title::TitleState>,
+    screen: Res<State<crate::screen::GameScreen>>,
     init: Res<crate::title::InitialRun>,
     flags: Res<crate::event::EventFlags>,
     clock: Res<GameClock>,
@@ -2195,7 +2200,7 @@ pub fn run_title(
             _ => {
                 keys.release_all();
                 t.frames += 1;
-                if title.active && !demo.playing() {
+                if *screen.get() == crate::screen::GameScreen::Title {
                     // The run must be back at its authored initial state.
                     if player.pos != init.start {
                         fail(&t, "ed-to-title", format!("開始位置に戻らない {:?}", player.pos), &mut exit);
@@ -2222,7 +2227,7 @@ pub fn run_title(
                     fail(
                         &t,
                         "ed-to-title",
-                        format!("タイトルが開かない (title {} demo {})", title.active, demo.playing()),
+                        format!("タイトルが開かない (screen {:?} demo {})", screen.get(), demo.playing()),
                         &mut exit,
                     );
                 }
@@ -2277,7 +2282,10 @@ pub fn run_title(
                 keys.release_all();
                 t.frames += 1;
                 // Step 46 saved at (26,19,0) facing North with flag 25 on.
-                if !title.active && player.pos == GridPos::new(26, 19, 0) && flags.get(25) {
+                if *screen.get() != crate::screen::GameScreen::Title
+                    && player.pos == GridPos::new(26, 19, 0)
+                    && flags.get(25)
+                {
                     println!("[autotest] PASS title-continue: つづきから loads the slot");
                     println!("[autotest] ALL PASS (49 steps)");
                     exit.send(AppExit::Success);
@@ -2285,7 +2293,7 @@ pub fn run_title(
                     fail(
                         &t,
                         "title-continue",
-                        format!("ロードされない (title {} pos {:?} flag25 {})", title.active, player.pos, flags.get(25)),
+                        format!("ロードされない (screen {:?} pos {:?} flag25 {})", screen.get(), player.pos, flags.get(25)),
                         &mut exit,
                     );
                 }

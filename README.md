@@ -149,6 +149,23 @@ sudo apt install gcc-mingw-w64-x86-64
 `DEEPGRID_*` / `WGPU_*` は WSLENV で橋渡しされる(env を増やしたら
 run-win.sh と docker/deepgrid-run.sh の両方に追加)。
 
+### 画面遷移(GameScreen States, plan12)
+
+プレイ側の最上位画面は Bevy の `States`([src/screen.rs](src/screen.rs) の
+`GameScreen`: `Title` / `Demo` / `Playing`)。遷移は `NextState<GameScreen>`、
+各画面の生成・破棄は `OnEnter` / `OnExit`、画面依存のシステムは
+`run_if(in_state(...))` または関数内で `Res<State<GameScreen>>` を読む。
+
+- 起動時の初期状態は `insert_state` で選ぶ(通常は `Title`、autotest /
+  `--load` / 各 debug-shot(`title` を除く)/ perf は `Playing` 直行)。
+- **データ画面は States にしない**(意図的)。世界が進み続ける「プレイ中の
+  オーバーレイ」であり、同一フレームで `data.open` を書いて読む入力ルーティング
+  が挙動を担うため、次フレームまで反映されない `NextState` とは相性が悪い。
+  `DataScreen` はリソースのまま残し、`ActiveScreen::Data` は
+  「`Playing` かつ `data.open`」の導出値([`screen::active_screen`])。
+- 優先則 Title > Demo > Data > Play は `screen::active_screen` に一元化。
+  クロック凍結・移動凍結・キー設定はこの判定(または State 参照)を見る。
+
 ### 検証
 
 **`./scripts/verify-all.sh` が全項目の基準**: clippy → cargo test →

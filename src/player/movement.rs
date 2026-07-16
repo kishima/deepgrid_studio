@@ -473,10 +473,9 @@ pub struct ActionEvents<'w> {
     keybinds: Res<'w, crate::settings::Keybinds>,
     /// Sound-effect requests (plan10: footsteps, door, landing).
     se: EventWriter<'w, crate::audio::PlaySe>,
-    /// Demo playback (plan10): all play input is ignored while a demo runs.
-    demo: Res<'w, crate::demo::DemoState>,
-    /// Title screen (plan11): same — the title owns the screen entirely.
-    title: Res<'w, crate::title::TitleState>,
+    /// Top-level screen (plan12): play input/animation only advance while
+    /// `Playing` — the title and demo screens freeze them.
+    screen: Res<'w, State<crate::screen::GameScreen>>,
 }
 
 /// Drive input, animation, and the camera transform each frame.
@@ -513,12 +512,10 @@ pub fn player_movement(
         return;
     };
 
-    // Title / demo (plan10/11): freeze all play input/animation; the overlay
-    // owns the screen until it closes. One shared judgement (plan12: States).
-    if matches!(
-        crate::screen::active_screen(&events.title, &events.demo, &data),
-        crate::screen::ActiveScreen::Title | crate::screen::ActiveScreen::Demo
-    ) {
+    // Title / demo (plan12): freeze all play input/animation; those screens own
+    // the display until they close. The data screen is `Playing` + `data.open`
+    // (an overlay that keeps simulating), so it is handled below, not here.
+    if *events.screen.get() != crate::screen::GameScreen::Playing {
         return;
     }
 
