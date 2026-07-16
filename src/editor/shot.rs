@@ -74,10 +74,18 @@ fn spawn_render_target(mut commands: Commands, mut images: ResMut<Assets<Image>>
 fn editor_ui_image(
     mut contexts: Query<&mut EguiContext, With<EguiRenderToImage>>,
     mut state: ResMut<EditorState>,
+    mut font_frames: Local<u32>,
 ) {
     for mut ctx in &mut contexts {
-        build_editor_ui(ctx.get_mut(), &mut state);
+        let ctx = ctx.get_mut();
+        // Install the JP font on the off-screen context too (its own context, so
+        // it needs its own install — see ui::FONT_INSTALL_FRAMES).
+        if *font_frames < 30 {
+            super::ui::install_fonts(ctx);
+        }
+        build_editor_ui(ctx, &mut state);
     }
+    *font_frames += 1;
 }
 
 /// After the UI has settled, request a readback of the image; when it completes,

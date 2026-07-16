@@ -170,8 +170,6 @@ pub struct EditorState {
     pub warnings: Vec<String>,
     /// Shared scratch buffer for the id-rename box.
     pub rename_buf: String,
-    /// Whether the Japanese egui font has been installed on this context yet.
-    pub fonts_installed: bool,
     /// Whether the map tab shows the 3D walk view (plan9.5).
     pub mode_3d: bool,
     /// Cells whose terrain the 3D view must rebuild (drained by `edit3d`).
@@ -219,7 +217,6 @@ impl EditorState {
             cursor: None,
             warnings: Vec::new(),
             rename_buf: String::new(),
-            fonts_installed: false,
             mode_3d: false,
             d3_terrain_dirty: Vec::new(),
             d3_markers_dirty: false,

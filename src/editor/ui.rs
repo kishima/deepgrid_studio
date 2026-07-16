@@ -20,14 +20,31 @@ use crate::monster::MoveType;
 const CELL_PX: f32 = 16.0;
 
 /// Editor UI driven by the primary window's egui context (interactive mode).
-pub fn editor_ui_window(mut contexts: EguiContexts, mut state: ResMut<EditorState>) {
-    build_editor_ui(contexts.ctx_mut(), &mut state);
+/// How many of the editor's first rendered frames reapply the JP font. Installing
+/// it only once can land before bevy_egui finishes initialising the window
+/// context (which starts on egui's default, CJK-less font), leaving Japanese as
+/// tofu. Reapplying for a handful of frames survives that; egui rebuilds the atlas
+/// only when the fonts actually change, so the repeats are cheap (plan13).
+const FONT_INSTALL_FRAMES: u32 = 30;
+
+pub fn editor_ui_window(
+    mut contexts: EguiContexts,
+    mut state: ResMut<EditorState>,
+    mut font_frames: Local<u32>,
+) {
+    let ctx = contexts.ctx_mut();
+    if *font_frames < FONT_INSTALL_FRAMES {
+        install_fonts(ctx);
+        *font_frames += 1;
+    }
+    build_editor_ui(ctx, &mut state);
 }
 
 /// Install the bundled Japanese pixel font so egui labels render (egui's default
 /// font has no CJK glyphs), and bump the default text sizes (2026-07 feedback:
-/// エディットの画面の文字が小さい). Done once per context.
-fn install_fonts(ctx: &egui::Context) {
+/// エディットの画面の文字が小さい). Applied per egui context (window + the
+/// render-to-image shot context) over the first frames — see [`FONT_INSTALL_FRAMES`].
+pub(super) fn install_fonts(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
     fonts.font_data.insert(
         "jp".to_owned(),
@@ -46,12 +63,9 @@ fn install_fonts(ctx: &egui::Context) {
     });
 }
 
-/// Build the whole editor UI. Reused for the window and the render-to-image shot.
+/// Build the whole editor UI. Reused for the window and the render-to-image shot;
+/// the JP font is installed by each caller on its own context (plan13).
 pub fn build_editor_ui(ctx: &mut egui::Context, state: &mut EditorState) {
-    if !state.fonts_installed {
-        install_fonts(ctx);
-        state.fonts_installed = true;
-    }
     let (undo, redo, save) = ctx.input(|i| {
         let cmd = i.modifiers.ctrl || i.modifiers.command;
         (
