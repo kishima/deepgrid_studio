@@ -32,6 +32,18 @@ pub enum GameScreen {
     Demo,
     /// Normal play (the data-screen overlay, when open, lives on top of this).
     Playing,
+    /// The Studio editor (plan13). A single-process sibling of play: the play
+    /// world is torn down on `OnEnter` and rebuilt on `OnExit`, and only the
+    /// editor's egui / edit3d systems run here.
+    Editor,
+}
+
+/// Run condition (plan13): true in every play-mode state (Title / Demo /
+/// Playing), false in [`GameScreen::Editor`]. The play world's Update systems
+/// hang off this so the editor state is the sole writer of `Dungeon` / `Palette`
+/// / `TileDirty` while it owns the window.
+pub fn not_editor(screen: Res<State<GameScreen>>) -> bool {
+    !matches!(*screen.get(), GameScreen::Editor)
 }
 
 /// The screen that owns input right now.
@@ -45,15 +57,18 @@ pub enum ActiveScreen {
     Data,
     /// Normal play.
     Play,
+    /// The Studio editor (plan13).
+    Editor,
 }
 
-/// The one priority rule: Title > Demo > Data > Play. `Data` is the derived
-/// overlay state "`GameScreen::Playing` and the data screen is open"; everything
-/// else follows directly from the state.
+/// The one priority rule: Title > Demo > Editor > Data > Play. `Data` is the
+/// derived overlay state "`GameScreen::Playing` and the data screen is open";
+/// everything else follows directly from the state.
 pub fn active_screen(screen: GameScreen, data: &DataScreen) -> ActiveScreen {
     match screen {
         GameScreen::Title => ActiveScreen::Title,
         GameScreen::Demo => ActiveScreen::Demo,
+        GameScreen::Editor => ActiveScreen::Editor,
         GameScreen::Playing if data.open => ActiveScreen::Data,
         GameScreen::Playing => ActiveScreen::Play,
     }
@@ -76,6 +91,6 @@ impl CurrentScreen<'_> {
     /// deliberately keeps the world simulating (plan5), while the title and
     /// demos freeze it.
     pub fn freezes_clock(&self) -> bool {
-        matches!(self.get(), ActiveScreen::Title | ActiveScreen::Demo)
+        matches!(self.get(), ActiveScreen::Title | ActiveScreen::Demo | ActiveScreen::Editor)
     }
 }

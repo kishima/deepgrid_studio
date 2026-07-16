@@ -17,10 +17,7 @@ mod walk;
 use std::collections::HashMap;
 
 use bevy::prelude::*;
-use bevy_egui::EguiPlugin;
-
-use crate::debug_shot;
-use crate::dungeon::{Block, Dungeon, Facing, GridPos};
+use crate::dungeon::{Block, Facing, GridPos};
 use crate::item::ItemPlacement;
 use crate::monster::MonsterPlacement;
 use crate::project::{self, LevelData, Project};
@@ -91,6 +88,23 @@ impl Tab {
         }
     }
 }
+
+/// A screen transition the editor UI asks for (plan13). The egui top bar only
+/// mutates [`EditorState`], so it records the request here and a Bevy system
+/// (`editor_transition`) performs the world rebuild + state change next.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EditorRequest {
+    /// Rebuild the world from the (unsaved) project and play it (F5 / テストプレイ).
+    TestPlay,
+    /// Rebuild the runtime from the project and return to the title (タイトルへ).
+    ToTitle,
+}
+
+/// Set while a test-play session is running (plan13): the play world was built
+/// from the editor's unsaved project, saving/loading is disabled, and F5 / the ED
+/// demo return to the editor rather than the title.
+#[derive(Resource, Default)]
+pub struct TestPlay(pub bool);
 
 /// What a left/right click paints on the map (plan9 placement layers).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -168,6 +182,8 @@ pub struct EditorState {
     pub d3_full: bool,
     /// The 3D walker's coordinate/facing readout (shown in the top bar).
     pub d3_coord: String,
+    /// A pending screen transition requested by the top bar (plan13).
+    pub request: Option<EditorRequest>,
     /// Whether anything is unsaved (Save All writes everything).
     dirty: bool,
     // Map Undo/Redo (per level; cleared on level switch).
@@ -209,6 +225,7 @@ impl EditorState {
             d3_markers_dirty: false,
             d3_full: false,
             d3_coord: String::new(),
+            request: None,
             dirty: false,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -686,62 +703,188 @@ fn trigger_for(block: Block) -> crate::event::TriggerKind {
     }
 }
 
-/// Build and run the editor app (edit mode).
-pub fn run(project: Project) {
-    let state = EditorState::new(project);
+/// Marks the editor's own entities (the 2D camera) so leaving the editor tears
+/// them down. The 3D-edit scene carries [`edit3d::Edit3dScoped`] and is torn down
+/// alongside it.
+#[derive(Component)]
+pub struct EditorScoped;
 
-    let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "DeepGrid Studio — Editor".to_string(),
-            ..default()
-        }),
-        ..default()
-    }))
-    .add_plugins(EguiPlugin)
-    .insert_resource(ClearColor(Color::srgb(0.10, 0.10, 0.12)))
-    .insert_resource(state)
-    .add_systems(Startup, setup_editor_camera);
+/// Register the editor onto the unified App (plan13). [`EditorState`] is inserted
+/// once and persists across play trips (undo history / active tab / list
+/// selection survive a test-play round trip); the editor's *entities* are
+/// (re)built by [`enter_editor`] / [`exit_editor`] on the [`GameScreen::Editor`]
+/// state edges. The play world's [`crate::world::PlayScoped`] chrome (camera /
+/// HUD / portraits) is rebuilt on exit by re-running the play setup systems.
+pub fn register(app: &mut App, project: Project) {
+    use crate::screen::GameScreen;
+    app.insert_resource(EditorState::new(project))
+        .init_resource::<TestPlay>()
+        .add_systems(OnEnter(GameScreen::Editor), enter_editor)
+        .add_systems(
+            OnExit(GameScreen::Editor),
+            (
+                exit_editor,
+                (crate::portrait::setup_portraits, crate::hud::setup_hud).chain(),
+                crate::player::setup_player,
+            ),
+        )
+        .add_systems(
+            Update,
+            (ui::editor_ui_window, editor_transition)
+                .chain()
+                .run_if(in_state(GameScreen::Editor)),
+        )
+        // F5 during a test play returns to the editor (runs in the play world).
+        .add_systems(
+            Update,
+            testplay_return.run_if(in_state(GameScreen::Playing)),
+        );
+    edit3d::register(app);
+}
 
-    if let Some(tab) = debug_shot::editor_shot_tab() {
-        // Verification: render a given egui tab into an image and capture it.
-        shot::setup(&mut app, tab);
-    } else {
-        // Interactive editor (and the editor-3d Bevy-screenshot scene): the 2D
-        // egui editor plus the 3D walk mode (plan9.5).
-        edit3d::register(&mut app);
-        app.add_systems(Startup, edit3d_setup_resources);
-        app.add_systems(Update, ui::editor_ui_window);
-        if debug_shot::wants_editor_3d() {
-            app.add_systems(Update, edit3d::edit3d_shot_driver);
+/// Register the egui render-to-image editor shot (`DEEPGRID_DEBUG_SHOT=editor` /
+/// `editor-<tab>`) on the unified App.
+pub fn register_shot(app: &mut App, tab: Tab) {
+    shot::setup(app, tab);
+}
+
+/// Register the 3D-edit Bevy-screenshot driver (`DEEPGRID_DEBUG_SHOT=editor-3d`).
+pub fn register_3d_shot(app: &mut App) {
+    use crate::screen::GameScreen;
+    app.add_systems(Update, edit3d::edit3d_shot_driver.run_if(in_state(GameScreen::Editor)));
+}
+
+/// Register the editor → test-play screenshot driver
+/// (`DEEPGRID_DEBUG_SHOT=editor-testplay`, plan13).
+pub fn register_testplay_shot(app: &mut App) {
+    app.add_systems(Update, editor_testplay_shot_driver);
+}
+
+/// `editor-testplay` shot: while in the editor, wall the cell directly ahead of
+/// the start and F5 into play. The normal `debug_shot::debug_screenshot` (which
+/// runs only in play states) then captures the first-person view, so the wall an
+/// unsaved edit added is proven visible in the play world.
+fn editor_testplay_shot_driver(
+    mut frames: Local<u32>,
+    mut placed: Local<bool>,
+    mut state: ResMut<EditorState>,
+    screen: Res<State<crate::screen::GameScreen>>,
+) {
+    *frames += 1;
+    if *frames >= 8 && !*placed && *screen.get() == crate::screen::GameScreen::Editor {
+        let lvl = &state.proj.levels[0];
+        let (start, facing) = (lvl.start, lvl.start_facing);
+        let (dx, dy) = facing.delta();
+        let (fx, fy) = (start.x + dx, start.y + dy);
+        state.floor_index = start.floor;
+        state.place_layer = PlaceLayer::Block;
+        state.selected = Block::Wall;
+        state.place_at(fx, fy);
+        state.end_stroke();
+        state.request = Some(EditorRequest::TestPlay);
+        *placed = true;
+    }
+}
+
+/// OnEnter(Editor): the editor takes the single window. Tear down the play world
+/// (level mesh + chrome), silence BGM, and spawn the 2D editor camera. The
+/// editor always opens in 2D (the 3D scene, if any, rode `LevelScoped` out).
+#[allow(clippy::type_complexity)]
+fn enter_editor(
+    mut commands: Commands,
+    play: Query<Entity, Or<(With<crate::world::LevelScoped>, With<crate::world::PlayScoped>)>>,
+    bgm: Query<Entity, With<crate::audio::BgmChannel>>,
+    mut bgm_state: ResMut<crate::audio::BgmState>,
+    mut state: ResMut<EditorState>,
+    mut spawned: ResMut<edit3d::Edit3dSpawned>,
+    mut test_play: ResMut<TestPlay>,
+) {
+    for e in &play {
+        commands.entity(e).despawn_recursive();
+    }
+    for e in &bgm {
+        commands.entity(e).despawn_recursive();
+    }
+    bgm_state.override_track = None;
+    state.mode_3d = false;
+    state.d3_terrain_dirty.clear();
+    state.d3_markers_dirty = false;
+    state.d3_full = false;
+    state.request = None;
+    spawned.0 = false;
+    // Back in the editor: no longer test-playing (the play world was discarded).
+    test_play.0 = false;
+    commands.spawn((Camera2d, EditorScoped));
+}
+
+/// Perform a top-bar / F5 transition out of the editor (plan13): rebuild the
+/// runtime from the editor's current (unsaved) project via `build_runtime`, then
+/// hand off to Playing (test play) or Title. The world rebuild is the same
+/// "restore globals + `LevelTransition`" path a reset/load uses, so no test-play-
+/// only construction code exists.
+#[allow(clippy::too_many_arguments)]
+fn editor_transition(
+    mut state: ResMut<EditorState>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut world: crate::runtime::ApplyWorld,
+    mut transition: EventWriter<crate::world::LevelTransition>,
+    mut next: ResMut<NextState<crate::screen::GameScreen>>,
+    mut test_play: ResMut<TestPlay>,
+    mut title: ResMut<crate::title::TitleState>,
+    mut log: ResMut<crate::hud::MessageLog>,
+) {
+    if keys.just_pressed(KeyCode::F5) && state.request.is_none() {
+        state.request = Some(EditorRequest::TestPlay);
+    }
+    let Some(req) = state.request.take() else { return };
+    let bundle = crate::runtime::build_runtime(&state.proj);
+    match req {
+        EditorRequest::TestPlay => {
+            let name = bundle.game_title.clone();
+            bundle.apply(&mut world, &mut transition);
+            test_play.0 = true;
+            log.push(format!("テストプレイ「{name}」 F5でエディターに戻る(セーブ無効)"));
+            next.set(crate::screen::GameScreen::Playing);
+        }
+        EditorRequest::ToTitle => {
+            title.game_title = bundle.game_title.clone();
+            title.game_author = bundle.game_author.clone();
+            title.game_desc = bundle.game_desc.clone();
+            title.playable = true;
+            title.error = None;
+            bundle.apply(&mut world, &mut transition);
+            test_play.0 = false;
+            title.open();
+            next.set(crate::screen::GameScreen::Title);
         }
     }
-
-    app.run();
 }
 
-fn setup_editor_camera(mut commands: Commands) {
-    commands.spawn(Camera2d);
-}
-
-/// Build the 3D-edit palette + the `Dungeon` mirror (from level 0) at startup.
-fn edit3d_setup_resources(
-    mut commands: Commands,
-    state: Res<EditorState>,
-    asset_server: Res<AssetServer>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+/// While test-playing, F5 returns to the editor (plan13). `EditorState` is left
+/// untouched, so the undo history / active tab / list selection survive the trip.
+/// `pub` so the autotest can order its injected F5 edge before this consumer.
+pub fn testplay_return(
+    keys: Res<ButtonInput<KeyCode>>,
+    test_play: Res<TestPlay>,
+    mut next: ResMut<NextState<crate::screen::GameScreen>>,
 ) {
-    let resolver = crate::project::AssetResolver { project_dir: state.proj.dir.clone() };
-    let palette = crate::render::build_palette(&asset_server, &resolver, &mut meshes, &mut materials);
-    commands.insert_resource(resolver);
-    commands.insert_resource(palette);
-    let lvl = &state.proj.levels[0];
-    commands.insert_resource(Dungeon {
-        level: lvl.level.clone(),
-        start_pos: lvl.start,
-        start_facing: lvl.start_facing,
-    });
+    if test_play.0 && keys.just_pressed(KeyCode::F5) {
+        next.set(crate::screen::GameScreen::Editor);
+    }
+}
+
+/// OnExit(Editor): despawn the editor's camera and any 3D-edit scene. The play
+/// chrome is rebuilt by the play setup systems chained after this in `register`;
+/// the level mesh / monsters / items are rebuilt by the `LevelTransition` the
+/// exiting action (test-play F5 / タイトルへ) already queued.
+#[allow(clippy::type_complexity)]
+fn exit_editor(
+    mut commands: Commands,
+    editor_ents: Query<Entity, Or<(With<EditorScoped>, With<edit3d::Edit3dScoped>)>>,
+) {
+    for e in &editor_ents {
+        commands.entity(e).despawn_recursive();
+    }
 }
 
 #[cfg(test)]

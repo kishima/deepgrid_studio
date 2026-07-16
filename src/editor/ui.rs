@@ -9,7 +9,7 @@ use bevy_egui::{EguiContexts, egui};
 use super::labels::{
     block_label, flag_join_label, growth_label, move_mode_label, move_type_label, plate_cond_label,
 };
-use super::{EditorState, PALETTE, PlaceLayer, Tab};
+use super::{EditorRequest, EditorState, PALETTE, PlaceLayer, Tab};
 use crate::character::{GrowthType, StatKind};
 use crate::dungeon::{Block, Facing};
 use crate::event::{EventAction, FlagJoin, LiquidKind, MoveMode, PlateCond, TriggerKind};
@@ -107,6 +107,17 @@ fn top_bar(ctx: &egui::Context, state: &mut EditorState) {
             }
             if ui.add_enabled(state.can_redo(), egui::Button::new("Redo")).clicked() {
                 state.redo();
+            }
+            // plan13: cross into the play world (unsaved edits and all) and back.
+            ui.separator();
+            if ui.button("▶ テストプレイ (F5)").clicked() {
+                state.request = Some(EditorRequest::TestPlay);
+            }
+            if ui.button("タイトルへ").clicked() {
+                state.request = Some(EditorRequest::ToTitle);
+            }
+            if state.is_dirty() {
+                ui.colored_label(egui::Color32::from_rgb(240, 200, 80), "未保存");
             }
         });
     });

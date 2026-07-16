@@ -52,6 +52,8 @@ pub enum RowKind {
     Start,
     Continue,
     Settings,
+    /// Open the Studio editor (plan13; hidden in play_only distributions).
+    Editor,
     Credits,
     Games,
     Quit,
@@ -197,28 +199,42 @@ fn on_off(b: bool) -> &'static str {
     if b { "ON" } else { "OFF" }
 }
 
+/// The main-menu row order (plan13). `エディター` is present only outside a
+/// `play_only` distribution; `クレジット` only when a CREDITS.md exists. Pure so
+/// the play_only hiding is unit-testable.
+fn main_menu_kinds(has_credits: bool, play_only: bool) -> Vec<RowKind> {
+    let mut kinds = vec![RowKind::Start, RowKind::Continue, RowKind::Settings];
+    if !play_only {
+        kinds.push(RowKind::Editor);
+    }
+    if has_credits {
+        kinds.push(RowKind::Credits);
+    }
+    kinds.push(RowKind::Games);
+    kinds.push(RowKind::Quit);
+    kinds
+}
+
 /// Build the current screen's rows from live state (idempotent; called whenever
 /// `rows` is empty or a value changed).
 fn rebuild_rows(state: &mut TitleState, acts: &TitleActions) {
     let mut rows = Vec::new();
     match state.screen {
         TitleScreen::Main => {
-            rows.push(Row {
-                label: "はじめから".into(),
-                enabled: state.playable,
-                kind: RowKind::Start,
-            });
-            rows.push(Row {
-                label: "つづきから".into(),
-                enabled: state.playable,
-                kind: RowKind::Continue,
-            });
-            rows.push(Row { label: "設定".into(), enabled: true, kind: RowKind::Settings });
-            if std::path::Path::new("CREDITS.md").is_file() {
-                rows.push(Row { label: "クレジット".into(), enabled: true, kind: RowKind::Credits });
+            let has_credits = std::path::Path::new("CREDITS.md").is_file();
+            for kind in main_menu_kinds(has_credits, acts.play_only.0) {
+                let (label, enabled): (&str, bool) = match kind {
+                    RowKind::Start => ("はじめから", state.playable),
+                    RowKind::Continue => ("つづきから", state.playable),
+                    RowKind::Settings => ("設定", true),
+                    RowKind::Editor => ("エディター", true),
+                    RowKind::Credits => ("クレジット", true),
+                    RowKind::Games => ("ゲームを選ぶ", true),
+                    RowKind::Quit => ("終了", true),
+                    _ => continue,
+                };
+                rows.push(Row { label: label.into(), enabled, kind });
             }
-            rows.push(Row { label: "ゲームを選ぶ".into(), enabled: true, kind: RowKind::Games });
-            rows.push(Row { label: "終了".into(), enabled: true, kind: RowKind::Quit });
         }
         TitleScreen::Continue => {
             for slot in 1..=save::SLOTS {
@@ -356,6 +372,11 @@ fn activate(state: &mut TitleState, acts: &mut TitleActions, kind: RowKind) {
         }
         RowKind::Continue => state.goto(TitleScreen::Continue),
         RowKind::Settings => state.goto(TitleScreen::Settings),
+        RowKind::Editor => {
+            // plan13: enter the Studio editor (same process / window).
+            acts.next_screen.set(GameScreen::Editor);
+            state.dirty = true;
+        }
         RowKind::Credits => {
             match std::fs::read_to_string("CREDITS.md") {
                 Ok(text) => {
@@ -923,6 +944,18 @@ mod tests {
         // 100% + up wraps to 0 (Enter-cycle), down clamps at 0.
         assert_eq!(cycle_volume(1.0, 0.1), 0.0);
         assert_eq!(cycle_volume(0.0, -0.1), 0.0);
+    }
+
+    #[test]
+    fn editor_entry_hidden_in_play_only() {
+        // Normal build: エディター is present.
+        assert!(main_menu_kinds(true, false).contains(&RowKind::Editor));
+        // play_only distribution: エディター is gone, everything else stays.
+        let dist = main_menu_kinds(true, true);
+        assert!(!dist.contains(&RowKind::Editor));
+        assert!(dist.contains(&RowKind::Start) && dist.contains(&RowKind::Games));
+        // Credits row follows the CREDITS.md presence, independent of play_only.
+        assert!(!main_menu_kinds(false, false).contains(&RowKind::Credits));
     }
 
     #[test]

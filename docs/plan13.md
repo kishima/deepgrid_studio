@@ -167,3 +167,49 @@
   依存しない)。
 - 新規ファイルを含むコミットでは git status を確認し、並行作業の
   ステージ済み変更を巻き込まないこと。
+
+## 実装状況(2026-07-17 完了)
+
+1. **build_runtime 抽出**(`src/runtime.rs`): `build_runtime(&Project) ->
+   RuntimeBundle`。`insert()` が起動時の一括 insert、`apply()` が実行中ワールドの
+   再構築(リセットと同型: グローバル復元 + `LevelTransition`。カタログ/レベル/
+   上限/ルール/BGMトラックも入れ替える)。`ApplyWorld` SystemParam でパラメーター
+   上限に収める。単体テスト `build_runtime_derives_from_project`。
+2. **App 統合**(`main.rs` `run_app`): 単一 App。`EguiPlugin` 常時登録。
+   プレイ側 Update 群はすべて `run_if(screen::not_editor)` で Editor 中は停止
+   (`Dungeon`/`Palette`/`TileDirty` の書き手を状態ごとに1人に)。`editor::run` 廃止。
+   `--edit`/`DEEPGRID_DEBUG_SHOT=editor-*`/`editor-testplay` は初期状態 Editor。
+   egui タブ撮影(shot.rs)・editor-3d は統合 App 上の登録関数
+   (`editor::register_shot`/`register_3d_shot`)へ移行。
+3. **GameScreen::Editor**: `OnEnter` で `LevelScoped`+`PlayScoped`(カメラ/HUD/
+   ポートレートリグ)破棄・BGM停止・`Camera2d` 構築・`mode_3d=false`。`OnExit` で
+   `EditorScoped`/`Edit3dScoped` 破棄後、プレイ setup 系(player/hud/portraits)を
+   再実行して chrome を復元。`EditorState` は1回だけ挿入し以後保持
+   (Undo履歴・タブ・選択が往復で残る)。タイトルに「エディター」項目
+   (`main_menu_kinds`、play_only で非表示、単体テスト `editor_entry_hidden_in_play_only`)。
+4. **テストプレイ**: 上部バー「▶ テストプレイ (F5)」/「タイトルへ」が
+   `EditorState.request` を立て、`editor_transition`(Editor 内)が `build_runtime`→
+   `apply` で再構築。**F5 往復**(`testplay_return` が Playing で F5→Editor)、
+   `TestPlay(true)` 中はセーブ/ロード無効(`save::persistence_disabled` を
+   handle_save/load・データ画面スロットが参照、単体テスト `test_play_gates_persistence`)、
+   ED デモ帰還先も Editor。帰還時 `EditorState` は不変。
+5. **エディター→タイトル**: `ToTitle` も `EditorState.proj` から再導出(タイトル
+   メタも更新)。上部バーに「未保存」表示。
+6. **検証**: autotest 50(title→editor)・51(壁+F5→プレイ世界に壁+開始位置)・
+   52(F5帰還で Undo履歴+dirty 保持)を追加(**ALL PASS 52 steps**)。新シーン
+   `editor-testplay`(エディターで置いた壁がテストプレイ一人称に写る、目視確認済み)。
+   `verify-all.sh` 全項目 PASS(autotest 49→52、シーン 29→30)。
+
+### 設計判断・見送り(記録のみ)
+
+- **所有権移譲は完全再構築**: プレイ chrome(カメラ/HUD/ポートレート)は `PlayScoped`
+   マーカーで Editor 出入り時に despawn→再構築。メッシュ・配置物は `LevelTransition`
+   が担う。「隠して使い回す」最適化はしない(plan の方針どおり)。
+- **autotest の F5 帰還**(step52)は注入エッジを同フレームで消費させるため
+   `run_editor.before(editor::testplay_return)` を明示(title 系の
+   `.before(drive_title)` と同型)。
+- **プロセス終了コード**: `App::run()` の `AppExit::Error` は `main` で伝播していない
+   (plan13 以前からの挙動)。autotest の合否は `[autotest] ALL PASS`/`FAIL` ログで判定する
+   (verify-all の `autotest` 行は終了コード依存のため実質常に PASS)。要改善だが本 plan の範囲外。
+- **step49 後のタイトル復帰**: `run_editor` step50 は `title.open()` で Main へ戻す
+   (step49 が Continue サブ画面を残すため)。

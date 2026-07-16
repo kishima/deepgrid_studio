@@ -18,7 +18,7 @@ CHECK_DIR="${DEEPGRID_CHECK_DIR:-/tmp/deepgrid-check}"
 PLAY_SCENES=(1 fall ladder door monster magic light potion plate warp stairs hole
              combat items pickup data liquid demo override title)
 EDITOR_SCENES=(editor editor-chars editor-items editor-monsters editor-magics
-               editor-events editor-demos editor-settings editor-3d)
+               editor-events editor-demos editor-settings editor-3d editor-testplay)
 
 declare -a RESULTS=()
 FAILED=0

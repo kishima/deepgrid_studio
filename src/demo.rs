@@ -159,6 +159,7 @@ pub fn drive_demo(
     mut title: ResMut<crate::title::TitleState>,
     mut reset: EventWriter<crate::title::ResetRunReq>,
     mut next_screen: ResMut<NextState<GameScreen>>,
+    test_play: Res<crate::editor::TestPlay>,
     mut text: Query<&mut Text, With<DemoText>>,
 ) {
     let Some(active) = &mut state.active else { return };
@@ -180,9 +181,15 @@ pub fn drive_demo(
             bgm.override_track = active.prev_override.clone();
             state.active = None;
             if was_ed {
-                reset.send(crate::title::ResetRunReq);
-                title.open();
-                next_screen.set(GameScreen::Title);
+                if test_play.0 {
+                    // plan13: an ED reached while test-playing returns to the
+                    // editor (the play world is discarded, not reset for title).
+                    next_screen.set(GameScreen::Editor);
+                } else {
+                    reset.send(crate::title::ResetRunReq);
+                    title.open();
+                    next_screen.set(GameScreen::Title);
+                }
             } else {
                 next_screen.set(GameScreen::Playing);
             }

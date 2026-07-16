@@ -30,6 +30,7 @@ mod portrait;
 mod project;
 mod render;
 mod rng;
+mod runtime;
 mod rules;
 mod save;
 mod screen;
@@ -43,18 +44,16 @@ use bevy::prelude::*;
 use serde::Deserialize;
 
 use clock::{CycleTick, GameClock};
-use floor_items::{InitialItems, PickupRequest};
+use floor_items::PickupRequest;
 use game_state::{DataScreen, SelectedMember};
 use hud::MessageLog;
-use monster::{
-    AttackRotation, InitialMonsters, MonsterOccupancy, PartyWiped, PlayerAction,
-};
+use monster::{AttackRotation, MonsterOccupancy, PartyWiped, PlayerAction};
 use player::{PlayerFell, ScriptedInput};
 use project::Project;
 use rng::GameRng;
 
 /// Default project loaded when `--project` is not given.
-const DEFAULT_PROJECT: &str = "assets/projects/sample";
+pub(crate) const DEFAULT_PROJECT: &str = "assets/projects/sample";
 
 const HELP: &str = "\
 DeepGrid Studio — だんだんダンジョン オマージュ (Rust + Bevy)
@@ -208,46 +207,52 @@ fn main() {
         Ok(p) => (p, None),
         Err(e) => {
             eprintln!("deepgrid_studio: failed to load project {}: {e}", project_dir.display());
-            if !show_title || edit || debug_shot::wants_editor() {
+            if !show_title || edit || debug_shot::wants_editor() || debug_shot::wants_editor_testplay() {
                 std::process::exit(1);
             }
             (Project::fallback(project_dir.clone()), Some(e))
         }
     };
 
-    // `DEEPGRID_DEBUG_SHOT=editor` forces edit mode so the editor screen can be
-    // captured without also passing `--edit`.
-    if edit || debug_shot::wants_editor() {
-        editor::run(project);
+    // plan13: one App, one window. `--edit` / `DEEPGRID_DEBUG_SHOT=editor-*`
+    // start in `GameScreen::Editor`; everything else in Title or Playing exactly
+    // as before. The editor is now a screen, not a separate process.
+    let start_in_editor = edit || debug_shot::wants_editor() || debug_shot::wants_editor_testplay();
+    let initial_screen = if start_in_editor {
+        screen::GameScreen::Editor
+    } else if show_title {
+        screen::GameScreen::Title
     } else {
-        // plan10 `override` scene: drop a temporary wall-texture override into
-        // the project (the ceiling rock — visibly different from the bricks)
-        // so the shot proves the swap, then clean it up so other scenes and
-        // the repo stay untouched.
-        let override_scene = debug_shot::debug_shot_value().as_deref() == Some("override");
-        let override_file = project_dir.join("override/textures/wall_bricks066_color.png");
-        if override_scene {
-            if let Some(parent) = override_file.parent() {
-                std::fs::create_dir_all(parent).ok();
-            }
-            std::fs::copy("assets/textures/ceiling_rock058_color.png", &override_file).ok();
+        screen::GameScreen::Playing
+    };
+
+    // plan10 `override` scene: drop a temporary wall-texture override into the
+    // project (the ceiling rock — visibly different from the bricks) so the shot
+    // proves the swap, then clean it up so other scenes and the repo stay
+    // untouched. (Play scene only; harmless in the editor path.)
+    let override_scene = debug_shot::debug_shot_value().as_deref() == Some("override");
+    let override_file = project_dir.join("override/textures/wall_bricks066_color.png");
+    if override_scene {
+        if let Some(parent) = override_file.parent() {
+            std::fs::create_dir_all(parent).ok();
         }
-        run_play(project, cli.load_slot, PlayLaunch {
-            show_title,
-            load_error,
-            play_only: launch.play_only,
-        });
-        if override_scene {
-            std::fs::remove_file(&override_file).ok();
-            let _ = std::fs::remove_dir(project_dir.join("override/textures"));
-            let _ = std::fs::remove_dir(project_dir.join("override"));
-        }
+        std::fs::copy("assets/textures/ceiling_rock058_color.png", &override_file).ok();
+    }
+    run_app(
+        project,
+        cli.load_slot,
+        PlayLaunch { load_error, play_only: launch.play_only },
+        initial_screen,
+    );
+    if override_scene {
+        std::fs::remove_file(&override_file).ok();
+        let _ = std::fs::remove_dir(project_dir.join("override/textures"));
+        let _ = std::fs::remove_dir(project_dir.join("override"));
     }
 }
 
 /// Title-related launch options for play mode (plan11).
 struct PlayLaunch {
-    show_title: bool,
     load_error: Option<String>,
     play_only: bool,
 }
@@ -270,45 +275,25 @@ fn window_resolution() -> bevy::window::WindowResolution {
         .unwrap_or_default()
 }
 
-/// Build and run the play-mode app: load the project's level 0 into the 3D
-/// runtime (plan1/plan2 systems).
-fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
-    // Doors start closed unless the level's `!`/`@` glyphs mark a kind open (v6).
-    let doors = world::doors_for(&project.levels[0], None, project.limits.door_kinds_per_level);
-    let dungeon = project.levels[0].to_dungeon();
-    let party = project.build_party();
-    // The pristine run captured for「はじめから」/ ED-demo resets (plan11).
-    let initial_run = title::InitialRun {
-        party: character::Party { members: party.members.clone() },
-        initial_flags: project.initial_flags.clone(),
-        start: project.levels[0].start,
-        facing: project.levels[0].start_facing,
-    };
+/// Build and run the unified app (plan13): one window hosting the play runtime
+/// (plan1/plan2 systems) and the Studio editor, switched by the `GameScreen`
+/// state. `initial_screen` picks which owns the window at launch.
+fn run_app(
+    project: Project,
+    load_slot: Option<usize>,
+    launch: PlayLaunch,
+    initial_screen: screen::GameScreen,
+) {
+    // plan13: the Project → runtime derivation lives in `runtime::build_runtime`
+    // so the editor can rebuild the world from its unsaved project too.
+    let bundle = runtime::build_runtime(&project);
     let title_state = title::TitleState::new(
         launch.load_error.is_none(),
         launch.load_error,
-        project.name.clone(),
-        project.author.clone(),
-        project.description.clone(),
+        bundle.game_title.clone(),
+        bundle.game_author.clone(),
+        bundle.game_desc.clone(),
     );
-    // plan12: the title/demo/play screens are a Bevy `State`. A normal launch
-    // opens on the title; unattended verification and `--load` start in Playing
-    // (exactly as the pre-plan12 `TitleState.active` flag decided).
-    let initial_screen = if launch.show_title {
-        screen::GameScreen::Title
-    } else {
-        screen::GameScreen::Playing
-    };
-    let catalog = project.build_catalog();
-    let monster_catalog = project.build_monster_catalog();
-    let magic_catalog = project.build_magic_catalog();
-    let initial_items = InitialItems(project.levels[0].items.clone());
-    let initial_monsters = InitialMonsters(project.levels[0].monsters.clone());
-    let mut event_flags = event::EventFlags::new(project.limits.event_flags);
-    for &f in &project.initial_flags {
-        event_flags.set(f, true); // plan9: initial-on flags
-    }
-    let game_levels = world::GameLevels { levels: project.levels.clone() };
 
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
@@ -323,32 +308,22 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
         }),
         ..default()
     }))
+    // plan13: egui runs every frame but only the editor state draws with it, so
+    // the play scenes are visually unchanged (verified by the scene shots).
+    .add_plugins(bevy_egui::EguiPlugin)
     // Dark clear color: unlit ceiling/void reads as dungeon gloom.
     .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.03)))
-    .insert_resource(project.limits.clone())
-    .insert_resource(dungeon)
-    .insert_resource(doors)
-    .insert_resource(party)
-    .insert_resource(catalog)
-    .insert_resource(monster_catalog)
-    .insert_resource(magic_catalog)
-    .insert_resource(project.rules.clone())
-    .insert_resource(initial_items)
-    .insert_resource(initial_monsters)
     .insert_resource(ScriptedInput::default())
     .insert_resource(settings::Keybinds::load())
     .insert_resource(settings::UserSettings::load())
-    .insert_resource(project::AssetResolver { project_dir: project.dir.clone() })
     // plan10: audio + demos.
     .init_resource::<audio::BgmState>()
     .init_resource::<demo::DemoState>()
-    .insert_resource(demo::DemoCatalog(project.demos.clone()))
     .insert_resource(save::PendingCliLoad(load_slot))
     // plan11: title screen + run reset. plan12: the screen is a Bevy `State`.
     .insert_state(initial_screen)
     .insert_resource(title_state)
     .insert_resource(title::PlayOnly(launch.play_only))
-    .insert_resource(initial_run)
     .add_event::<title::ResetRunReq>()
     .init_resource::<world::SkipNextSnapshot>()
     .add_event::<audio::PlaySe>()
@@ -370,8 +345,6 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
     .init_resource::<magic::SelectedMagic>()
     .init_resource::<game_state::DataView>()
     // plan8: events / gimmicks / multi-level.
-    .insert_resource(event_flags)
-    .insert_resource(game_levels)
     .init_resource::<event::EventQueue>()
     .init_resource::<event::TriggerStates>()
     .init_resource::<event::MoveMode>()
@@ -387,7 +360,24 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
     .add_event::<event::WallWriteRequest>()
     .add_event::<render::TileDirty>()
     .add_event::<world::LevelTransition>();
+    // plan13: the project-derived resources (dungeon / party / catalogs / levels /
+    // limits / rules / flags / demos / …) come from one place now.
+    bundle.insert(&mut app);
     data_screen::init(&mut app);
+    // plan13: the editor is a screen on this same App. Its `EditorState` persists
+    // across play trips; its entities live only in `GameScreen::Editor`.
+    editor::register(&mut app, project);
+    // Editor verification scenes: the egui render-to-image tabs, and the 3D-walk
+    // Bevy screenshot. Both drive the unified App in the Editor state.
+    if let Some(tab) = debug_shot::editor_shot_tab() {
+        editor::register_shot(&mut app, tab);
+    }
+    if debug_shot::wants_editor_3d() {
+        editor::register_3d_shot(&mut app);
+    }
+    if debug_shot::wants_editor_testplay() {
+        editor::register_testplay_shot(&mut app);
+    }
 
     app.add_systems(
         Startup,
@@ -411,7 +401,8 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
             portrait::attach_portrait_anim,
             floor_items::spin_floor_items,
             debug_shot::debug_screenshot,
-        ),
+        )
+            .run_if(screen::not_editor),
     )
     // Monster display + occupancy (frame-rate driven visuals).
     .add_systems(
@@ -423,7 +414,8 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
             monster::bind_monster_players,
             monster::drive_monster_anim,
             monster::interpolate_monsters,
-        ),
+        )
+            .run_if(screen::not_editor),
     )
     // Cycle time: tick the clock, then run every on-cycle system this frame.
     .add_systems(
@@ -439,7 +431,8 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
             monster::monster_attacks,
             monster::monster_lifecycle,
         )
-            .chain(),
+            .chain()
+            .run_if(screen::not_editor),
     )
     // Pickup/place/combat read this frame's requests (written by movement / the
     // data screen), so order them after their producers.
@@ -457,7 +450,8 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
             data_screen::toggle_data_screen,
             data_screen::refresh_data_screen.after(data_screen::toggle_data_screen),
             data_screen::refresh_magic_screen.after(data_screen::toggle_data_screen),
-        ),
+        )
+            .run_if(screen::not_editor),
     )
     // Magic runtime (plan7): drive casts requested by the magic tab / M key /
     // debug driver, animate light-bullets, and decay the lighting boost.
@@ -471,7 +465,8 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
                 .after(monster::player_actions),
             magic::drive_player_light.after(magic::cast_magic),
             magic::animate_projectiles,
-        ),
+        )
+            .run_if(screen::not_editor),
     )
     // plan8: events / gimmicks / multi-level. Triggers read this frame's player
     // position + interact events; run_events drives the queue on cycle ticks;
@@ -503,7 +498,8 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
                 .after(event::run_events)
                 .after(world::level_transition)
                 .after(player::player_movement),
-        ),
+        )
+            .run_if(screen::not_editor),
     )
     // plan10: audio (SE after their producers, BGM follows level/override) and
     // demo playback (start requests come from run_events).
@@ -530,7 +526,8 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
             demo::drive_demo
                 .after(demo::start_demo)
                 .run_if(in_state(screen::GameScreen::Demo)),
-        ),
+        )
+            .run_if(screen::not_editor),
     )
     .add_systems(OnExit(screen::GameScreen::Demo), demo::teardown_demo)
     // plan11: title screen. Menu actions run before the reset/load/demo systems
@@ -559,7 +556,8 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
                 .after(title::title_buttons)
                 .after(demo::drive_demo)
                 .run_if(in_state(screen::GameScreen::Title)),
-        ),
+        )
+            .run_if(screen::not_editor),
     )
     .add_systems(OnExit(screen::GameScreen::Title), title::teardown_title)
     .add_systems(
@@ -573,7 +571,8 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
             hud::magic_button_clicks,
             settings::keyconfig_input,
             portrait::freeze_portraits,
-        ),
+        )
+            .run_if(screen::not_editor),
     );
 
     // Frame-time measurement mode (plan11): print avg/worst and exit.
@@ -635,6 +634,17 @@ fn run_play(project: Project, load_slot: Option<usize>, launch: PlayLaunch) {
                 autotest::run_title
                     .before(title::drive_title)
                     .before(demo::start_demo),
+            )
+            // plan13 editor steps: drive the title menu (before drive_title) and
+            // the editor⇔play round trip; run after run_title (disjoint step range).
+            // Ordered before testplay_return too, so the injected F5 edge for the
+            // return-to-editor step is consumed the same frame (like drive_title).
+            .add_systems(
+                Update,
+                autotest::run_editor
+                    .after(autotest::run_title)
+                    .before(title::drive_title)
+                    .before(editor::testplay_return),
             );
     }
 

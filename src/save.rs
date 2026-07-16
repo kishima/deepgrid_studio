@@ -105,6 +105,14 @@ pub struct SaveWorld<'w> {
     pub resolver: Res<'w, crate::project::AssetResolver>,
 }
 
+/// Persistence (save/load) is disabled while test-playing an unsaved editor
+/// project (plan13): the live world was built from memory, so it and the on-disk
+/// saves would disagree. The single source of truth for the gate — the two
+/// handlers and the data-screen slots all consult it.
+pub fn persistence_disabled(test_play: &crate::editor::TestPlay) -> bool {
+    test_play.0
+}
+
 /// Handle [`SaveRequest`]: snapshot the current level (same function as a
 /// transition), then serialize everything to the slot file.
 #[allow(clippy::too_many_arguments)]
@@ -116,11 +124,16 @@ pub fn handle_save(
     game_levels: Res<GameLevels>,
     monsters: Query<&crate::monster::Monster>,
     items: Query<&crate::floor_items::FloorItem>,
+    test_play: Res<crate::editor::TestPlay>,
     mut log: ResMut<MessageLog>,
 ) {
     for req in reqs.read() {
         let slot = req.0;
         if !(1..=SLOTS).contains(&slot) {
+            continue;
+        }
+        if persistence_disabled(&test_play) {
+            log.push("テストプレイ中はセーブできません");
             continue;
         }
         // Freeze the loaded level into a copy of the visited-level map.
@@ -206,6 +219,7 @@ pub fn handle_load(
     mut w: LoadWorld,
     mut party: ResMut<Party>,
     mut transition: EventWriter<LevelTransition>,
+    test_play: Res<crate::editor::TestPlay>,
     mut log: ResMut<MessageLog>,
 ) {
     let mut slots: Vec<usize> = Vec::new();
@@ -214,6 +228,10 @@ pub fn handle_load(
     }
     slots.extend(reqs.read().map(|r| r.0));
     let Some(&slot) = slots.last() else { return };
+    if persistence_disabled(&test_play) {
+        log.push("テストプレイ中はロードできません");
+        return;
+    }
     let data = match read_slot(&w.resolver.project_dir, slot) {
         Ok(d) => d,
         Err(e) => {
@@ -247,6 +265,13 @@ mod tests {
     use crate::character::{Character, CharacterState};
     use crate::item::Inventory;
     use crate::world::{FloorItemSnapshot, MonsterSnapshot};
+
+    #[test]
+    fn test_play_gates_persistence() {
+        // plan13: saving/loading is refused only while a test play is running.
+        assert!(persistence_disabled(&crate::editor::TestPlay(true)));
+        assert!(!persistence_disabled(&crate::editor::TestPlay(false)));
+    }
 
     fn sample_character() -> Character {
         use crate::character::{GrowthType, Stats};

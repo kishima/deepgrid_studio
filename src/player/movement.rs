@@ -214,6 +214,7 @@ pub fn setup_player(mut commands: Commands, dungeon: Res<Dungeon>) {
     commands
         .spawn((
             PlayerCamera,
+            crate::world::PlayScoped,
             Camera3d::default(),
             // Msaa off is friendlier to the software Vulkan (lavapipe) path.
             Msaa::Off,

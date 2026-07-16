@@ -126,10 +126,16 @@ const REST_CYCLES: u64 = 10;
 pub fn save_slot_clicks(
     buttons: Query<(&Interaction, &SaveSlotBtn), Changed<Interaction>>,
     resolver: Res<crate::project::AssetResolver>,
+    test_play: Res<crate::editor::TestPlay>,
     mut screen: ResMut<DataScreen>,
     mut save_req: EventWriter<crate::save::SaveRequest>,
     mut load_req: EventWriter<crate::save::LoadRequest>,
 ) {
+    // plan13: no save/load target exists while test-playing (buttons are hidden),
+    // but stay defensive if a stray interaction slips through.
+    if crate::save::persistence_disabled(&test_play) {
+        return;
+    }
     for (i, b) in &buttons {
         if *i != Interaction::Pressed {
             continue;
@@ -211,6 +217,7 @@ pub fn toggle_data_screen(
     magics: Res<MagicCatalog>,
     limits: Res<crate::config::LimitsConfig>,
     resolver: Res<crate::project::AssetResolver>,
+    test_play: Res<crate::editor::TestPlay>,
 ) {
     if !screen.is_changed() {
         return;
@@ -219,7 +226,9 @@ pub fn toggle_data_screen(
         (true, None) => {
             let regular: Handle<Font> = asset_server.load(FONT_REGULAR);
             let bold: Handle<Font> = asset_server.load(FONT_BOLD);
-            let e = build_screen(&mut commands, &regular, &bold, &party, &magics, &limits, &resolver);
+            let e = build_screen(
+                &mut commands, &regular, &bold, &party, &magics, &limits, &resolver, test_play.0,
+            );
             root.0 = Some(e);
         }
         (false, Some(e)) => {
@@ -245,6 +254,7 @@ fn text(font: &Handle<Font>, size: f32, color: Color, s: impl Into<String>) -> i
 }
 
 /// Build the full overlay; returns the root entity.
+#[allow(clippy::too_many_arguments)]
 fn build_screen(
     commands: &mut Commands,
     regular: &Handle<Font>,
@@ -253,6 +263,7 @@ fn build_screen(
     magics: &MagicCatalog,
     limits: &crate::config::LimitsConfig,
     resolver: &crate::project::AssetResolver,
+    test_play: bool,
 ) -> Entity {
     // Deterministic magic order for the list.
     let mut magic_ids: Vec<String> = magics.iter().map(|d| d.id.clone()).collect();
@@ -325,6 +336,25 @@ fn build_screen(
             })
             .with_children(|row| {
                 row.spawn(text(bold, 15.0, Color::srgb(0.75, 0.8, 0.9), "セーブ/ロード:"));
+                // plan13: while test-playing, the unsaved project on disk would
+                // disagree with the live world, so saving/loading is disabled and
+                // the reason is shown (no SaveSlotBtn = no click target).
+                if test_play {
+                    let dim = Color::srgb(0.5, 0.5, 0.5);
+                    for slot in 1..=crate::save::SLOTS {
+                        for kind in ["セーブ", "ロード"] {
+                            row.spawn((
+                                Node { padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)), ..default() },
+                                BackgroundColor(Color::srgb(0.12, 0.12, 0.14)),
+                            ))
+                            .with_children(|b| {
+                                b.spawn(text(regular, 14.0, dim, format!("{kind}{slot}")));
+                            });
+                        }
+                    }
+                    row.spawn(text(regular, 13.0, Color::srgb(0.9, 0.7, 0.4), "(テストプレイ中は無効)"));
+                    return;
+                }
                 for slot in 1..=crate::save::SLOTS {
                     let exists = crate::save::slot_exists(&resolver.project_dir, slot);
                     row.spawn((

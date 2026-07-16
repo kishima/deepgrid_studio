@@ -162,7 +162,7 @@ pub fn setup_portraits(
         // Model, feet at `base`, facing +Z (toward the camera), Idle looping.
         let (scene, anim) =
             portrait_scene(&asset_server, &mut graphs, &member.character.model, ANIM_IDLE_ADVENTURER);
-        commands.spawn((scene, anim, Transform::from_translation(base)));
+        commands.spawn((scene, anim, Transform::from_translation(base), crate::world::PlayScoped));
 
         // Fill light close in front of the model (range-limited so it can't reach
         // the dungeon far above).
@@ -174,6 +174,7 @@ pub fn setup_portraits(
                 ..default()
             },
             Transform::from_translation(base + Vec3::new(0.6, 1.7, 1.4)),
+            crate::world::PlayScoped,
         ));
 
         // Camera looking at the bust. Short far-plane so only this model (nothing
@@ -183,6 +184,7 @@ pub fn setup_portraits(
         let look = base + Vec3::new(0.0, BUST_TARGET_Y - 0.05, 0.0);
         commands.spawn((
             PortraitCamera,
+            crate::world::PlayScoped,
             Camera3d::default(),
             Camera {
                 target: RenderTarget::Image(target),

@@ -2286,9 +2286,8 @@ pub fn run_title(
                     && player.pos == GridPos::new(26, 19, 0)
                     && flags.get(25)
                 {
-                    println!("[autotest] PASS title-continue: つづきから loads the slot");
-                    println!("[autotest] ALL PASS (49 steps)");
-                    exit.send(AppExit::Success);
+                    // plan13: hand off to the editor steps (run_editor, step ≥ 50).
+                    t.next_step("title-continue: つづきから loads the slot");
                 } else if t.frames > STEP_TIMEOUT_FRAMES {
                     fail(
                         &t,
@@ -2296,6 +2295,177 @@ pub fn run_title(
                         format!("ロードされない (screen {:?} pos {:?} flag25 {})", screen.get(), player.pos, flags.get(25)),
                         &mut exit,
                     );
+                }
+            }
+        },
+
+        _ => {}
+    }
+}
+
+// ==================================================================== editor steps
+
+use crate::editor::{EditorRequest, EditorState, PlaceLayer, Tab, TestPlay};
+use crate::screen::GameScreen;
+use crate::title::{RowKind, TitleState};
+
+/// Steps 50–52 (plan13): the title → editor entry, an unsaved edit test-played
+/// via F5 (the wall is in the play world and the party stands at the start), and
+/// the F5 return preserving the editor's undo history + dirty flag. Runs once
+/// `run_title` advances `step` past 49. Drives the real menu + state machine
+/// (injected key edges + cross-frame polling; no reliance on `NextState` timing).
+#[allow(clippy::too_many_arguments)]
+pub fn run_editor(
+    mut t: ResMut<AutoTest>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut editor: ResMut<EditorState>,
+    mut title: ResMut<TitleState>,
+    screen: Res<State<GameScreen>>,
+    mut next: ResMut<NextState<GameScreen>>,
+    dungeon: Res<Dungeon>,
+    player: Res<Player>,
+    test_play: Res<TestPlay>,
+    mut exit: EventWriter<AppExit>,
+) {
+    if t.step < 50 || t.fatal.is_some() {
+        return;
+    }
+    let fail = |t: &AutoTest, name: &str, why: String, exit: &mut EventWriter<AppExit>| {
+        eprintln!("[autotest] FAIL {name}: {why}");
+        eprintln!("[autotest] {} step(s) passed before the failure", t.step);
+        exit.send(AppExit::error());
+    };
+    let tap = |keys: &mut ButtonInput<KeyCode>, key: KeyCode| {
+        keys.release_all();
+        keys.press(key);
+    };
+
+    match t.step {
+        // ---- 50: the title's「エディター」row opens the editor ----------------
+        50 => match t.phase {
+            0 => {
+                // Step 49 left the title on its つづきから sub-screen; reset it to
+                // the main menu (fresh rows) and return there.
+                title.open();
+                next.set(GameScreen::Title);
+                t.frames = 0;
+                t.phase = 1;
+            }
+            1 => {
+                keys.release_all();
+                if *screen.get() == GameScreen::Title
+                    && title.screen == crate::title::TitleScreen::Main
+                    && !title.rows.is_empty()
+                {
+                    t.phase = 2;
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "editor-enter", "タイトルが開かない".into(), &mut exit);
+                }
+                t.frames += 1;
+            }
+            2 => {
+                // Walk the cursor down to the エディター row, then Enter it.
+                t.frames += 1;
+                match title.rows.get(title.sel).map(|r| r.kind) {
+                    Some(RowKind::Editor) => {
+                        tap(&mut keys, KeyCode::Enter);
+                        t.frames = 0;
+                        t.phase = 3;
+                    }
+                    _ if t.frames > STEP_TIMEOUT_FRAMES => {
+                        fail(&t, "editor-enter", "エディター行に辿り着けない".into(), &mut exit);
+                    }
+                    _ => tap(&mut keys, KeyCode::ArrowDown),
+                }
+            }
+            _ => {
+                keys.release_all();
+                t.frames += 1;
+                if *screen.get() == GameScreen::Editor {
+                    t.next_step("editor-enter: title「エディター」opens the editor");
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "editor-enter", "エディターに入れない".into(), &mut exit);
+                }
+            }
+        },
+
+        // ---- 51: an unsaved wall is test-played (F5) from the start ----------
+        51 => match t.phase {
+            0 => {
+                // Paint a wall on the first empty, non-start floor-0 cell.
+                editor.tab = Tab::Map;
+                editor.mode_3d = false;
+                editor.floor_index = 0;
+                editor.place_layer = PlaceLayer::Block;
+                editor.selected = Block::Wall;
+                let start = editor.proj.levels[0].start;
+                let (w, h) = (editor.cur().width() as i32, editor.cur().height() as i32);
+                let mut target = None;
+                'find: for y in 0..h {
+                    for x in 0..w {
+                        if editor.block_at(x, y) == Some(Block::Empty)
+                            && !(start.floor == 0 && start.x == x && start.y == y)
+                        {
+                            target = Some((x, y));
+                            break 'find;
+                        }
+                    }
+                }
+                let Some((x, y)) = target else {
+                    fail(&t, "editor-testplay", "空きセルが無い".into(), &mut exit);
+                    return;
+                };
+                editor.place_at(x, y);
+                editor.end_stroke();
+                t.saved_pos = Some(GridPos::new(x, y, 0));
+                t.start_pos = Some(start);
+                // Kick off the test play (exactly what F5 / the top bar do).
+                editor.request = Some(EditorRequest::TestPlay);
+                t.frames = 0;
+                t.phase = 1;
+            }
+            _ => {
+                t.frames += 1;
+                let cell = t.saved_pos.unwrap();
+                if *screen.get() == GameScreen::Playing && test_play.0 {
+                    let has_wall = dungeon.level.block_at(cell) == Some(Block::Wall);
+                    let at_start = player.pos == t.start_pos.unwrap();
+                    if has_wall && at_start {
+                        t.next_step("editor-testplay: F5 plays the unsaved wall from the start");
+                    } else if t.frames > STEP_TIMEOUT_FRAMES {
+                        fail(&t, "editor-testplay", format!("wall={has_wall} at_start={at_start}"), &mut exit);
+                    }
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "editor-testplay", "テストプレイに入れない".into(), &mut exit);
+                }
+            }
+        },
+
+        // ---- 52: F5 returns to the editor with undo history + dirty kept -----
+        52 => match t.phase {
+            0 => {
+                tap(&mut keys, KeyCode::F5);
+                t.frames = 0;
+                t.phase = 1;
+            }
+            _ => {
+                keys.release_all();
+                t.frames += 1;
+                if *screen.get() == GameScreen::Editor {
+                    if editor.can_undo() && editor.is_dirty() {
+                        println!("[autotest] PASS editor-return: F5 keeps undo history + dirty");
+                        println!("[autotest] ALL PASS (52 steps)");
+                        exit.send(AppExit::Success);
+                    } else {
+                        fail(
+                            &t,
+                            "editor-return",
+                            format!("undo={} dirty={}", editor.can_undo(), editor.is_dirty()),
+                            &mut exit,
+                        );
+                    }
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "editor-return", "エディターに戻れない".into(), &mut exit);
                 }
             }
         },

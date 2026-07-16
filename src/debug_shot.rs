@@ -93,6 +93,14 @@ pub fn wants_editor_3d() -> bool {
     debug_shot_value().as_deref() == Some("editor-3d")
 }
 
+/// Whether the requested scene is the plan13 editor → test-play scene
+/// (`DEEPGRID_DEBUG_SHOT=editor-testplay`): start in the editor, wall the cell
+/// ahead of the start, F5 into play, and Bevy-screenshot the first-person view
+/// so the unsaved edit is proven visible in the play world.
+pub fn wants_editor_testplay() -> bool {
+    debug_shot_value().as_deref() == Some("editor-testplay")
+}
+
 /// Which editor tab a `DEEPGRID_DEBUG_SHOT=editor[-tab]` scene opens, or `None`
 /// for a non-editor scene (plan9). Bare `editor` = the map tab.
 pub fn editor_shot_tab() -> Option<crate::editor::Tab> {

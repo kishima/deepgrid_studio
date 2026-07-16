@@ -32,6 +32,13 @@ pub struct CurrentLevel(pub usize);
 #[derive(Component)]
 pub struct LevelScoped;
 
+/// Marks the play-mode chrome that lives across level transitions but is torn
+/// down when the editor takes over the single window (plan13): the first-person
+/// camera, the HUD, and the portrait render rig. `LevelScoped` (mesh / monsters /
+/// items) is rebuilt per level; `PlayScoped` is rebuilt when leaving the editor.
+#[derive(Component)]
+pub struct PlayScoped;
+
 /// Every level's authored data, available at runtime for transitions.
 #[derive(Resource, Default)]
 pub struct GameLevels {

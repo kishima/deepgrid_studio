@@ -34,12 +34,13 @@ pub struct Edit3dCamera;
 #[derive(Resource, Default)]
 pub struct Edit3dSpawned(pub bool);
 
-/// Register the 3D-edit resources + systems on the editor app.
+/// Register the 3D-edit resources + systems on the unified App (plan13). Runs
+/// only in [`GameScreen::Editor`]; `Keybinds` / `TileDirty` already exist on the
+/// play App, so only the edit3d-specific resources are added here.
 pub fn register(app: &mut App) {
+    use crate::screen::GameScreen;
     app.init_resource::<Edit3dSpawned>()
         .insert_resource(EditWalk::new(GridPos::new(0, 0, 0), Facing::North))
-        .insert_resource(Keybinds::load())
-        .add_event::<TileDirty>()
         .add_systems(
             Update,
             (
@@ -49,7 +50,8 @@ pub fn register(app: &mut App) {
                 edit3d_walk.after(edit3d_manage),
                 edit3d_camera.after(edit3d_walk),
                 edit3d_place.after(edit3d_manage),
-            ),
+            )
+                .run_if(in_state(GameScreen::Editor)),
         );
 }
 

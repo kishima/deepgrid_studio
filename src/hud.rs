@@ -210,6 +210,7 @@ pub fn setup_hud(
                 ..default()
             },
             BackgroundColor(PANEL_BG),
+            crate::world::PlayScoped,
         ))
         .with_children(|panel| {
             for (slot, member) in party.members.iter().enumerate() {
@@ -234,6 +235,7 @@ pub fn setup_hud(
                 ..default()
             },
             BackgroundColor(PANEL_BG),
+            crate::world::PlayScoped,
         ))
         .with_children(|panel| {
             for row in 0..VISIBLE_LINES {
@@ -279,6 +281,7 @@ pub fn setup_hud(
                 ..default()
             },
             BackgroundColor(PANEL_BG),
+            crate::world::PlayScoped,
         ))
         .with_children(|col| {
             for row_def in actions {
@@ -365,6 +368,7 @@ pub fn setup_hud(
                 ..default()
             },
             BackgroundColor(PANEL_BG),
+            crate::world::PlayScoped,
         ))
         .with_children(|col| {
             let wide_bar = |col: &mut ChildBuilder, cmd: Command, label: &str| {
