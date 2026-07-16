@@ -406,10 +406,34 @@ pub fn bind_monster_players(
 /// Play the animation matching each monster's current `AnimKind`.
 pub fn drive_monster_anim(
     time: Res<Time>,
-    mut monsters: Query<(&mut Monster, &mut MonsterGraph)>,
+    player_res: Res<crate::player::Player>,
+    mut monsters: Query<(&mut Monster, &mut MonsterGraph, &mut Visibility)>,
     mut players: Query<&mut AnimationPlayer>,
 ) {
-    for (mut m, mut mg) in &mut monsters {
+    // plan11 計測手当: 遠くのモンスターは描画もアニメ再生も止める(lavapipe は
+    // スキニング+ラスタライズが CPU 負担。一人称ダンジョンでは壁に隠れて
+    // どうせ見えない距離)。近づけば即座に再開する。
+    const CULL_DIST: i32 = 14; // manhattan blocks
+    let ppos = player_res.pos;
+    for (mut m, mut mg, mut vis) in &mut monsters {
+        let far = (m.pos.x - ppos.x).abs() + (m.pos.y - ppos.y).abs() > CULL_DIST;
+        let want = if far { Visibility::Hidden } else { Visibility::Inherited };
+        if *vis != want {
+            *vis = want;
+        }
+        if far {
+            if let Some(pe) = mg.player
+                && let Ok(mut p) = players.get_mut(pe)
+            {
+                p.pause_all();
+            }
+            continue;
+        } else if mg.playing == Some(m.anim)
+            && let Some(pe) = mg.player
+            && let Ok(mut p) = players.get_mut(pe)
+        {
+            p.resume_all();
+        }
         // One-shot animations (attack/hit) revert once their hold expires.
         if m.anim_hold > 0.0 {
             m.anim_hold -= time.delta_secs();

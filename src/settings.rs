@@ -265,13 +265,15 @@ pub struct KeyConfig {
 /// so it can rebind the very keys movement reads.
 pub fn keyconfig_input(
     keys: Res<ButtonInput<KeyCode>>,
-    data: Res<crate::game_state::DataScreen>,
+    screen: crate::screen::CurrentScreen,
     mut cfg: ResMut<KeyConfig>,
     mut binds: ResMut<Keybinds>,
     mut log: ResMut<crate::hud::MessageLog>,
 ) {
-    if data.open {
-        return; // don't rebind while the data screen captures input
+    // Only rebind during plain play: the data screen captures input, and the
+    // title (plan11) has its own rebinding UI.
+    if screen.get() != crate::screen::ActiveScreen::Play {
+        return;
     }
     let cur_key_name = |binds: &Keybinds, a: GameAction| -> String {
         binds

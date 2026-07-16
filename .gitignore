@@ -7,3 +7,8 @@ user_settings.ron
 
 # plan10: play-mode saves (created by autotest / manual play)
 assets/projects/*/saves/
+
+# plan11: generated perf-measurement project (scripts/gen_stress_project.py)
+assets/projects/stress/
+# plan11: a stray distribution config at the repo root would hijack launches
+/deepgrid.ron

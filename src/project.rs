@@ -36,6 +36,12 @@ struct ProjectMeta {
     name: String,
     /// Project-format version (bumped when the schema changes).
     version: u32,
+    /// Author credit shown on the title screen (v8, plan11). Empty in v7-.
+    #[serde(default)]
+    author: String,
+    /// Short description for the title / game-select screens (v8, plan11).
+    #[serde(default)]
+    description: String,
     limits: LimitsConfig,
     /// Level file paths relative to the project dir; order = level number.
     levels: Vec<String>,
@@ -190,8 +196,8 @@ impl LevelData {
 
 /// Project-format version this build writes. Older versions are still accepted
 /// on load (v1: no characters; v2: no items; v3: no monsters; v4: no magic;
-/// v5: no events/gimmicks; v6: no demos/BGM).
-pub const PROJECT_VERSION: u32 = 7;
+/// v5: no events/gimmicks; v6: no demos/BGM; v7: no author/description).
+pub const PROJECT_VERSION: u32 = 8;
 
 /// A loaded project: metadata, limits, levels, registered characters + party
 /// roster (v2+), and item definitions (v3+). `Clone` so the editor (plan9) can
@@ -200,6 +206,10 @@ pub const PROJECT_VERSION: u32 = 7;
 pub struct Project {
     pub dir: PathBuf,
     pub name: String,
+    /// Author credit (v8, plan11; empty for older projects).
+    pub author: String,
+    /// Short description (v8, plan11; empty for older projects).
+    pub description: String,
     pub limits: LimitsConfig,
     pub level_paths: Vec<String>,
     pub levels: Vec<LevelData>,
@@ -819,6 +829,8 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
     Ok(Project {
         dir,
         name: meta.name,
+        author: meta.author,
+        description: meta.description,
         limits: meta.limits,
         level_paths: meta.levels,
         levels,
@@ -867,6 +879,91 @@ pub fn demos_from_ron(
         }
     }
     Ok(demos)
+}
+
+impl Project {
+    /// A minimal always-valid in-memory project (plan11 panic elimination):
+    /// when the requested project fails to load, play mode runs this so the
+    /// title screen can still show an error banner and offer "ゲームを選ぶ".
+    /// Never written to disk.
+    pub fn fallback(dir: PathBuf) -> Self {
+        use crate::dungeon::level::{Floor, Level};
+        // Floor 0 all wall (footing), floor 1 all empty; start in the middle.
+        let w = 3;
+        let floor0 = Floor { width: w, height: w, blocks: vec![Block::Wall; w * w] };
+        let floor1 = Floor { width: w, height: w, blocks: vec![Block::Empty; w * w] };
+        let level = LevelData {
+            start: GridPos::new(1, 1, 1),
+            start_facing: Facing::North,
+            level: Level { floors: vec![floor0, floor1] },
+            items: Vec::new(),
+            monsters: Vec::new(),
+            wall_texts: Vec::new(),
+            stairs_links: Vec::new(),
+            events: Vec::new(),
+            open_doors: Vec::new(),
+            bgm: String::new(),
+        };
+        Project {
+            dir,
+            name: "(読み込み失敗)".into(),
+            author: String::new(),
+            description: String::new(),
+            limits: LimitsConfig::default(),
+            level_paths: vec!["levels/level00.ron".into()],
+            levels: vec![level],
+            characters: Vec::new(),
+            party: Vec::new(),
+            items: Vec::new(),
+            monsters: Vec::new(),
+            magics: Vec::new(),
+            rules: RulesConfig::default(),
+            initial_flags: Vec::new(),
+            demos: Vec::new(),
+            characters_path: String::new(),
+            items_path: String::new(),
+            monsters_path: String::new(),
+            magics_path: String::new(),
+            demos_path: String::new(),
+        }
+    }
+}
+
+/// A lightweight listing entry for the title's "ゲームを選ぶ" screen (plan11):
+/// just the metadata, no level/content loading or validation.
+#[derive(Clone, Debug)]
+pub struct ProjectCard {
+    pub dir: PathBuf,
+    pub name: String,
+    pub author: String,
+    pub description: String,
+}
+
+/// Read a directory's `project.ron` metadata only. `None` when the file is
+/// missing or unparsable (broken projects simply don't appear in the list).
+pub fn read_project_card(dir: &Path) -> Option<ProjectCard> {
+    let text = std::fs::read_to_string(dir.join("project.ron")).ok()?;
+    let meta: ProjectMeta = ron::from_str(&text).ok()?;
+    Some(ProjectCard {
+        dir: dir.to_path_buf(),
+        name: meta.name,
+        author: meta.author,
+        description: meta.description,
+    })
+}
+
+/// Scan the current project's parent directory for sibling projects (any
+/// directory holding a parsable `project.ron`), sorted by name.
+pub fn scan_project_cards(current: &Path) -> Vec<ProjectCard> {
+    let Some(parent) = current.parent() else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(parent) else { return Vec::new() };
+    let mut cards: Vec<ProjectCard> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| read_project_card(&e.path()))
+        .collect();
+    cards.sort_by(|a, b| a.name.cmp(&b.name));
+    cards
 }
 
 /// The loaded project's directory as a resource, so asset loads can consult its
@@ -966,6 +1063,8 @@ pub fn save_project(project: &Project) -> Result<(), Vec<String>> {
     let meta = ProjectMeta {
         name: project.name.clone(),
         version: PROJECT_VERSION,
+        author: project.author.clone(),
+        description: project.description.clone(),
         limits: project.limits.clone(),
         levels: project.level_paths.clone(),
         characters: characters_file,
@@ -1286,6 +1385,74 @@ mod tests {
     }
 
     #[test]
+    fn v7_meta_without_plan11_fields_parses() {
+        // Backward compat (plan11): a v7 project.ron (no author/description)
+        // still parses; the new fields default to empty.
+        let meta: ProjectMeta = ron::from_str(
+            r#"(name: "old7", version: 7, limits: (), levels: ["levels/level00.ron"])"#
+                .replace("limits: ()", V6_LIMITS)
+                .as_str(),
+        )
+        .expect("v7 meta parses");
+        assert_eq!(meta.author, "");
+        assert_eq!(meta.description, "");
+    }
+
+    /// The minimal explicit limits block used by version-compat tests.
+    const V6_LIMITS: &str = "limits: (max_levels: 1, floors_per_level: 1, floor_width: 3, \
+        floor_height: 3, door_kinds_per_level: 2, max_characters: 1, party_size: 1, \
+        max_item_kinds: 1, item_placements_per_level: 1, max_monster_kinds: 1, \
+        monster_kinds_per_level: 1, monster_placements_per_level: 1, max_magic_kinds: 1, \
+        event_flags: 4, max_event_delay: 3, demo_message_lines: 160)";
+
+    #[test]
+    fn author_description_round_trip() {
+        // v8 fields survive a save_project round trip.
+        let tmp = std::env::temp_dir().join(format!("deepgrid_v8_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let mut p = load_project("assets/projects/sample").expect("sample loads");
+        p.dir = tmp.clone();
+        p.author = "作者テスト".into();
+        p.description = "説明テスト".into();
+        save_project(&p).expect("save");
+        let back = load_project(&tmp).expect("reload");
+        assert_eq!(back.author, "作者テスト");
+        assert_eq!(back.description, "説明テスト");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn fallback_project_is_playable_shell() {
+        let p = Project::fallback(PathBuf::from("/nonexistent"));
+        assert_eq!(p.levels.len(), 1);
+        // The start tile must satisfy the same rules load-time validation checks.
+        let lvl = &p.levels[0];
+        assert!(lvl.level.is_supported(lvl.start.x, lvl.start.y, lvl.start.floor));
+        assert!(p.build_party().members.is_empty());
+    }
+
+    #[test]
+    fn project_cards_scan_siblings() {
+        // A parsable project.ron appears as a card; a broken sibling doesn't.
+        let base = std::env::temp_dir().join(format!("deepgrid_cards_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let good = base.join("good");
+        let bad = base.join("bad");
+        std::fs::create_dir_all(&good).unwrap();
+        std::fs::create_dir_all(&bad).unwrap();
+        let mut p = load_project("assets/projects/sample").expect("sample loads");
+        p.dir = good.clone();
+        p.author = "A".into();
+        save_project(&p).expect("save");
+        std::fs::write(bad.join("project.ron"), "(broken").unwrap();
+        let cards = scan_project_cards(&good);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].dir, good);
+        assert_eq!(cards[0].author, "A");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn demos_ron_limits_are_enforced() {
         let limits = LimitsConfig { max_demos: 1, ..LimitsConfig::default() };
         let ok = demos_from_ron(r#"[(id: "op", lines: ["a"])]"#, &limits, "demos.ron");
@@ -1325,6 +1492,8 @@ mod tests {
         let project = Project {
             dir: PathBuf::from("/tmp/x"),
             name: "t".into(),
+            author: String::new(),
+            description: String::new(),
             limits: LimitsConfig::default(),
             level_paths: vec![],
             levels: vec![],

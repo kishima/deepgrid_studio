@@ -183,3 +183,58 @@ GPU 実行の節に導入手順・スクリプト仕様が既に書いてある 
   完了報告に明記して依頼すること。
 - 新規ファイルを含むコミットでは git status を確認し、並行作業の
   ステージ済み変更を巻き込まないこと。
+
+## 実装状況(2026-07-16)
+
+全ステップ実装済み。主な構成:
+
+- **タイトル**: `src/title.rs`(TitleState ゲート+メニュー全画面+設定UI+
+  クレジット+ゲーム選択+ResetRunReq/apply_reset)。画面アクティブ判定は
+  `src/screen.rs::active_screen`(Title > Demo > Data > Play)に集約 —
+  plan12 はここを States に差し替える。`tick_clock` / `player_movement` /
+  `keyconfig_input` はヘルパー経由に移行済み。
+- **EDデモ→タイトル**: `demo.rs::drive_demo` の close 分岐で id `"ed"` のみ
+  reset+`TitleState::open()`。sample に `ed` デモと level01 の祭壇スイッチ
+  (10,5,0)を追加。
+- **v8**: `author` / `description`(serde default)。`PROJECT_VERSION 7→8`。
+  v7 後方互換テスト・Save All 往復テストあり。エディター設定タブに編集欄。
+- **配布**: `scripts/export-game.sh` + `deepgrid.ron`(`LaunchConfig`)。
+  play_only は `--edit` とゲーム選択を丁寧に拒否(`resolve_mode` 単体テスト+
+  verify-all の実機テスト)。除外規則は `tests/export_layout.rs`。
+- **Windows**: `.cargo/config.toml`(mingw リンカ)+
+  `scripts/deepgrid-run-win.sh`(WSLENV 橋渡し、AdapterInfo は起動ログ)。
+  mingw 導入と GPU 目視は人間タスク。
+- **計測**: `src/perf.rs`(`DEEPGRID_PERF`、ウォームアップ2秒+平均/最悪出力)
+  + `scripts/gen_stress_project.py`(48モンスター・800アイテム・40×40×5、
+  gitignore)。
+- **品質**: プロジェクトロード失敗は `Project::fallback()`+タイトルの
+  エラーバナー(無人モードのみ stderr+exit 1)。`--help` 追加。README を
+  3部構成に再構成。
+- **検証**: autotest 47→**49ステップ**(48: ed-to-title、49: title-continue。
+  キー注入は `ButtonInput` へ直接、`run_title` を消費側より前に順序付け)。
+  シーン 28→**29種**(`title` 追加)。`scripts/verify-all.sh` を新設。
+
+### DEEPGRID_PERF 計測値(lavapipe / docker、10秒窓・ウォームアップ2秒)
+
+| 構成 | sample | stress(48体+800個) |
+| --- | --- | --- |
+| 着手時 1280x720 | 61.3ms / **16.3fps** | 65.5ms / **15.3fps** |
+| vsync オフ(不採用) | 61.4ms / 16.3fps(効果なし→差し戻し) | 65.8ms / 15.2fps |
+| 参考 800x450 | 33.2ms / 30.1fps | — |
+| 960x540(採用) | 41.9ms / **23.9fps** | 53.7ms / 18.6fps |
+| 960x540+モンスター距離カリング(採用) | — | 44.4ms / **22.5fps** |
+
+- **診断**: sample と stress の差が僅少(1280x720 で 4ms)で、フレーム時間が
+  ピクセル数にほぼ比例 → lavapipe は**フィルレート律速**。plan 候補だった
+  床タイル矩形マージ等の幾何側手当では届かないと判断。
+- **採用手当1**: `DEEPGRID_WINDOW=WxH` 環境変数を追加し、docker の
+  **対話プレイのみ** 960x540 を既定化(deepgrid-run.sh。検証ショット・
+  autotest は従来の 1280x720 のまま)。
+- **採用手当2**: モンスターの距離カリング(manhattan 14 ブロック超は
+  Visibility::Hidden+アニメ pause。`drive_monster_anim`)。stress で
+  9.3ms 削減を計測確認。
+- **不採用**: vsync オフ(効果ゼロで差し戻し)。
+- **結果**: lavapipe 20fps 目標を sample(23.9)/stress(22.5)とも達成。
+  Windows GPU の 60fps 張り付き確認は人間の目視項目(未計測)。計測後に
+  `DEEPGRID_PERF=10 ./scripts/deepgrid-run-win.sh --project assets/projects/stress`
+  の値をここに追記すること。

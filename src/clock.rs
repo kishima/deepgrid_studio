@@ -50,16 +50,16 @@ pub struct CycleTick {
 /// Advance the clock by real `Time` and emit one `CycleTick` per boundary. Runs
 /// before the on-cycle systems so they see this frame's ticks. Game speed
 /// (plan10, `user_settings.ron` speed 0.5/1.0/2.0) scales the delta here — the
-/// single point where real time becomes game time. Demo playback (plan10)
-/// freezes the clock entirely.
+/// single point where real time becomes game time. The title screen (plan11)
+/// and demo playback (plan10) freeze the clock entirely.
 pub fn tick_clock(
     time: Res<Time>,
     settings: Res<crate::settings::UserSettings>,
-    demo: Res<crate::demo::DemoState>,
+    screen: crate::screen::CurrentScreen,
     mut clock: ResMut<GameClock>,
     mut ticks: EventWriter<CycleTick>,
 ) {
-    if demo.playing() {
+    if screen.freezes_clock() {
         return;
     }
     clock.accum += time.delta_secs() * settings.speed.clamp(0.25, 4.0);

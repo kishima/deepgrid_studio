@@ -1,0 +1,7 @@
+# Windows native cross build (plan11 / project.md「Windows ネイティブ GPU 実行」).
+# Requires the one-time setup (sudo needed for mingw):
+#   ~/.cargo/bin/rustup target add x86_64-pc-windows-gnu
+#   sudo apt install gcc-mingw-w64-x86-64
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+ar = "x86_64-w64-mingw32-ar"

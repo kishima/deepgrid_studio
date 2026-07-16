@@ -94,5 +94,8 @@ MP3/WAV 配布のものは ffmpeg で OGG (q5) に変換して収録。
 
 ## 自作・生成素材
 
-(まだなし。追加時は生成スクリプトのパスと生成手順をここに記録する。
-※ポートレートの加工スクリプトは上記の節を参照)
+| 素材 | 生成スクリプト | 生成手順 | プロジェクト内ファイル | 用途 | 導入日 |
+| --- | --- | --- | --- | --- | --- |
+| 計測用ストレスプロジェクト | scripts/gen_stress_project.py | `python3 scripts/gen_stress_project.py`(定義ファイルは sample から複製。決定的生成) | assets/projects/stress/(gitignore — 再生成前提でコミットしない) | DEEPGRID_PERF 計測(plan11) | 2026-07-16 |
+
+(※ポートレートの加工スクリプトは上記の節を参照)

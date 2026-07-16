@@ -5,7 +5,10 @@
 // sizing, door kinds, character count and party size.
 (
     name: "Sample Dungeon",
-    version: 7,
+    version: 8,
+    // v8 (plan11): shown on the title screen and the「ゲームを選ぶ」list.
+    author: "DeepGrid Studio",
+    description: "だんだんダンジョン オマージュのサンプルゲーム。\n全機能のフィクスチャを兼ねる。",
     limits: (
         max_levels: 14,
         floors_per_level: 5,

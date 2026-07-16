@@ -2117,12 +2117,177 @@ pub fn run_gimmick(
                     refs.settings.speed = 1.0;
                     // 2.0× vs 0.5× is a 4× ratio; assert a comfortable margin.
                     if t.baseline >= slow * 2 {
-                        println!("[autotest] PASS speed: 2.0x ticks {}, 0.5x ticks {slow}", t.baseline);
-                        println!("[autotest] ALL PASS (47 steps)");
-                        exit.send(AppExit::Success);
+                        let msg = format!("speed: 2.0x ticks {}, 0.5x ticks {slow}", t.baseline);
+                        t.next_step(&msg);
                     } else {
                         fail(&t, "speed", format!("速度倍率が効かない (2x:{} 0.5x:{slow})", t.baseline), &mut exit);
                     }
+                }
+            }
+        },
+
+        _ => {}
+    }
+}
+
+// ==================================================================== title steps
+
+/// Steps 48–49 (plan11): the ED demo returns to the title with the run reset,
+/// and the title's「つづきから」loads a slot. Both drive the *real* input path:
+/// key presses are injected into `ButtonInput<KeyCode>` (this system is ordered
+/// before `drive_demo` / `drive_title`, so an injected edge is seen the same
+/// frame and cleared by bevy_input on the next).
+#[allow(clippy::too_many_arguments)]
+pub fn run_title(
+    mut t: ResMut<AutoTest>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut demo_req: EventWriter<crate::demo::StartDemoReq>,
+    demo: Res<crate::demo::DemoState>,
+    title: Res<crate::title::TitleState>,
+    init: Res<crate::title::InitialRun>,
+    flags: Res<crate::event::EventFlags>,
+    clock: Res<GameClock>,
+    player: Res<Player>,
+    party: Res<Party>,
+    mut exit: EventWriter<AppExit>,
+) {
+    if t.step < 48 || t.fatal.is_some() {
+        return;
+    }
+    let fail = |t: &AutoTest, name: &str, why: String, exit: &mut EventWriter<AppExit>| {
+        eprintln!("[autotest] FAIL {name}: {why}");
+        eprintln!("[autotest] {} step(s) passed before the failure", t.step);
+        exit.send(AppExit::error());
+    };
+    // One key edge per frame: press now; release on the next call so the next
+    // press is a fresh `just_pressed`.
+    let tap = |keys: &mut ButtonInput<KeyCode>, key: KeyCode| {
+        keys.release_all();
+        keys.press(key);
+    };
+
+    match t.step {
+        // ---- 48: the ED demo ends → title opens, run is reset ---------------
+        48 => match t.phase {
+            0 => {
+                demo_req.send(crate::demo::StartDemoReq("ed".to_string()));
+                t.frames = 0;
+                t.phase = 1;
+            }
+            1 => {
+                t.frames += 1;
+                if demo.playing() {
+                    tap(&mut keys, KeyCode::Escape); // skip to the END marker
+                    t.phase = 2;
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "ed-to-title", "edデモが始まらない".into(), &mut exit);
+                }
+            }
+            2 => {
+                keys.release_all(); // let the Escape edge clear
+                t.phase = 3;
+            }
+            3 => {
+                tap(&mut keys, KeyCode::Space); // close the END marker
+                t.frames = 0;
+                t.phase = 4;
+            }
+            _ => {
+                keys.release_all();
+                t.frames += 1;
+                if title.active && !demo.playing() {
+                    // The run must be back at its authored initial state.
+                    if player.pos != init.start {
+                        fail(&t, "ed-to-title", format!("開始位置に戻らない {:?}", player.pos), &mut exit);
+                        return;
+                    }
+                    if clock.cycle != 0 {
+                        fail(&t, "ed-to-title", format!("クロックが残っている ({})", clock.cycle), &mut exit);
+                        return;
+                    }
+                    if flags.get(25) {
+                        fail(&t, "ed-to-title", "フラグがリセットされない".into(), &mut exit);
+                        return;
+                    }
+                    if party.members.len() != init.party.members.len()
+                        || party.members.iter().zip(&init.party.members).any(|(a, b)| {
+                            a.state.hp != b.state.hp || a.character.stats.level != b.character.stats.level
+                        })
+                    {
+                        fail(&t, "ed-to-title", "パーティが初期状態でない".into(), &mut exit);
+                        return;
+                    }
+                    t.next_step("ed-to-title: ED demo returns to the title, run reset");
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(
+                        &t,
+                        "ed-to-title",
+                        format!("タイトルが開かない (title {} demo {})", title.active, demo.playing()),
+                        &mut exit,
+                    );
+                }
+            }
+        },
+
+        // ---- 49: title「つづきから」loads the step-46 save -------------------
+        49 => match t.phase {
+            0 => {
+                // Main menu: row 0 = はじめから, row 1 = つづきから.
+                if title.rows.is_empty() {
+                    return; // drive_title populates on its first frame
+                }
+                tap(&mut keys, KeyCode::ArrowDown);
+                t.frames = 0;
+                t.phase = 1;
+            }
+            1 => {
+                keys.release_all();
+                if title.sel == 1 {
+                    t.phase = 2;
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "title-continue", format!("選択が動かない (sel {})", title.sel), &mut exit);
+                }
+                t.frames += 1;
+            }
+            2 => {
+                tap(&mut keys, KeyCode::Enter); // enter the slot list
+                t.phase = 3;
+            }
+            3 => {
+                keys.release_all();
+                // Wait for the slot list (rows repopulate a frame after goto).
+                if title.screen == crate::title::TitleScreen::Continue && !title.rows.is_empty() {
+                    // Slot 1 (saved in step 46) is row 0 and must be enabled.
+                    if !title.rows.first().is_some_and(|r| r.enabled) {
+                        fail(&t, "title-continue", "スロット1が空き扱い".into(), &mut exit);
+                        return;
+                    }
+                    t.phase = 4;
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(&t, "title-continue", "スロット一覧が開かない".into(), &mut exit);
+                }
+                t.frames += 1;
+            }
+            4 => {
+                tap(&mut keys, KeyCode::Enter); // load slot 1
+                t.frames = 0;
+                t.phase = 5;
+            }
+            _ => {
+                keys.release_all();
+                t.frames += 1;
+                // Step 46 saved at (26,19,0) facing North with flag 25 on.
+                if !title.active && player.pos == GridPos::new(26, 19, 0) && flags.get(25) {
+                    println!("[autotest] PASS title-continue: つづきから loads the slot");
+                    println!("[autotest] ALL PASS (49 steps)");
+                    exit.send(AppExit::Success);
+                } else if t.frames > STEP_TIMEOUT_FRAMES {
+                    fail(
+                        &t,
+                        "title-continue",
+                        format!("ロードされない (title {} pos {:?} flag25 {})", title.active, player.pos, flags.get(25)),
+                        &mut exit,
+                    );
                 }
             }
         },

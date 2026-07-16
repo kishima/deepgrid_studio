@@ -134,7 +134,9 @@ pub fn start_demo(
 }
 
 /// Advance the running demo: timed line reveal, click/Space to hurry, Escape to
-/// skip to the END marker, any input at END to close.
+/// skip to the END marker, any input at END to close. Closing the `"ed"` demo
+/// returns to the title with the world rebuilt from scratch (plan11 — the
+/// provisional "game clear"); every other demo resumes play.
 #[allow(clippy::too_many_arguments)]
 pub fn drive_demo(
     mut commands: Commands,
@@ -144,6 +146,8 @@ pub fn drive_demo(
     catalog: Res<DemoCatalog>,
     mut state: ResMut<DemoState>,
     mut bgm: ResMut<BgmState>,
+    mut title: ResMut<crate::title::TitleState>,
+    mut reset: EventWriter<crate::title::ResetRunReq>,
     overlay: Query<Entity, With<DemoOverlay>>,
     mut text: Query<&mut Text, With<DemoText>>,
 ) {
@@ -159,12 +163,18 @@ pub fn drive_demo(
     let skip = keys.just_pressed(KeyCode::Escape);
 
     if active.at_end {
-        // END marker: one more input closes the overlay and resumes play.
+        // END marker: one more input closes the overlay and resumes play —
+        // except the ED demo, which resets the run and returns to the title.
         if advance || skip {
+            let was_ed = active.id == "ed";
             bgm.override_track = active.prev_override.clone();
             state.active = None;
             for e in &overlay {
                 commands.entity(e).despawn_recursive();
+            }
+            if was_ed {
+                reset.send(crate::title::ResetRunReq);
+                title.open();
             }
             return;
         }

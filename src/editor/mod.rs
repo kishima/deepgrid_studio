@@ -768,6 +768,8 @@ mod tests {
         Project {
             dir: std::path::PathBuf::from("/tmp/does-not-exist"),
             name: "T".to_string(),
+            author: String::new(),
+            description: String::new(),
             limits: LimitsConfig::default(),
             level_paths: vec!["levels/level00.ron".to_string()],
             levels: vec![level],

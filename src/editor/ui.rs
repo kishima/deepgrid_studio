@@ -1109,6 +1109,15 @@ fn settings_tab(ctx: &egui::Context, state: &mut EditorState) {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let mut dirty = false;
             dirty |= text_row(ui, "プロジェクト名", &mut state.proj.name);
+            // v8 (plan11): shown on the title / game-select screens.
+            dirty |= text_row(ui, "作者", &mut state.proj.author);
+            ui.label("説明");
+            if ui
+                .add(egui::TextEdit::multiline(&mut state.proj.description).desired_rows(3))
+                .changed()
+            {
+                dirty = true;
+            }
             ui.separator();
             ui.heading("上限 (LimitsConfig)");
             let l = &mut state.proj.limits;

@@ -32,6 +32,14 @@ fi
 TTY_FLAGS=()
 [[ -t 0 ]] && TTY_FLAGS=(-it)
 
+# lavapipe is fill-rate bound (plan11 measurement: frame time ~ pixel count).
+# Interactive play defaults to 960x540 to stay above 20fps; verification runs
+# (debug shots / autotest) keep the standard 1280x720 so screenshots and
+# fixtures are unchanged. Override with DEEPGRID_WINDOW=WxH.
+if [[ -z "${DEEPGRID_DEBUG_SHOT:-}" && -z "${DEEPGRID_AUTOTEST:-}" ]]; then
+  DEEPGRID_WINDOW="${DEEPGRID_WINDOW:-960x540}"
+fi
+
 exec docker run --rm "${TTY_FLAGS[@]}" \
   -v "$PROJECT":/app \
   -w /app \
@@ -43,6 +51,8 @@ exec docker run --rm "${TTY_FLAGS[@]}" \
   -e BEVY_ASSET_ROOT=/app \
   -e DEEPGRID_DEBUG_SHOT="${DEEPGRID_DEBUG_SHOT:-}" \
   -e DEEPGRID_AUTOTEST="${DEEPGRID_AUTOTEST:-}" \
+  -e DEEPGRID_PERF="${DEEPGRID_PERF:-}" \
+  -e DEEPGRID_WINDOW="${DEEPGRID_WINDOW:-}" \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
   -v /mnt/wslg:/mnt/wslg \
   "$IMAGE" "$BIN" "$@"

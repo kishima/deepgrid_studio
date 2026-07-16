@@ -18,7 +18,7 @@
             "#..........#",
             "#..........#",
             "#..K.......#",
-            "#..........#",
+            "#.........S#",
             "#....S.....#",
             "#..........#",
             "#......W...#",
@@ -46,6 +46,10 @@
         // Visible warp: step on it to jump across the room.
         (id: "l1_warp", trigger: WarpPoint(hidden: false), at: (9, 9, 0),
          actions: [Warp(level: 0, x: 1, y: 10, floor: 0, facing: South)]),
+        // plan11: the "altar" — pressing it plays the ED demo, which then
+        // returns to the title (the provisional game clear).
+        (id: "l1_ed", trigger: SwitchPush, at: (10, 5, 0),
+         actions: [StartDemo(demo: "ed")]),
     ],
     bgm: "bgm_dungeon2.ogg",
 )
