@@ -1,0 +1,37 @@
+// Demos (plan10): full-screen message cutscenes, Vec<DemoDef>.
+// Started by a StartDemo event action (level00 has switches for "op"/"mid").
+// Lines are shown one at a time; Space/click advances, Escape skips.
+[
+    (
+        id: "op",
+        name: "オープニング",
+        bgm: "bgm_mysterious.ogg",
+        bg_color: (0.02, 0.02, 0.08),
+        lines: [
+            "はるか昔 地の底に",
+            "「だんだんダンジョン」と よばれる",
+            "迷宮が あった。",
+            "",
+            "階段を おりるたび",
+            "闇は 深くなり",
+            "もどる者は いなかったという。",
+            "",
+            "いま 4人の さがしものたちが",
+            "その入口に 立つ。",
+        ],
+    ),
+    (
+        id: "mid",
+        name: "中間デモ",
+        bgm: "bgm_tension.ogg",
+        bg_color: (0.06, 0.01, 0.01),
+        lines: [
+            "床が 鳴動した。",
+            "",
+            "どこか 深いところで",
+            "何かが 目を さました。",
+            "",
+            "急いだほうが よさそうだ。",
+        ],
+    ),
+]

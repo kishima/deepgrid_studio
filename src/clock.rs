@@ -28,6 +28,15 @@ pub struct GameClock {
     accum: f32,
 }
 
+impl GameClock {
+    /// Restore the clock from a save (plan10): jump to `cycle`, drop the
+    /// sub-cycle remainder.
+    pub fn restore(&mut self, cycle: u64) {
+        self.cycle = cycle;
+        self.accum = 0.0;
+    }
+}
+
 /// Fired once for each cycle boundary crossed this frame. `cycle` is the index of
 /// the cycle that just began — carried for later plans (poison/fire ticks,
 /// monster turns) that will key off the absolute cycle; plan4's only reader
@@ -39,9 +48,21 @@ pub struct CycleTick {
 }
 
 /// Advance the clock by real `Time` and emit one `CycleTick` per boundary. Runs
-/// before the on-cycle systems so they see this frame's ticks.
-pub fn tick_clock(time: Res<Time>, mut clock: ResMut<GameClock>, mut ticks: EventWriter<CycleTick>) {
-    clock.accum += time.delta_secs();
+/// before the on-cycle systems so they see this frame's ticks. Game speed
+/// (plan10, `user_settings.ron` speed 0.5/1.0/2.0) scales the delta here — the
+/// single point where real time becomes game time. Demo playback (plan10)
+/// freezes the clock entirely.
+pub fn tick_clock(
+    time: Res<Time>,
+    settings: Res<crate::settings::UserSettings>,
+    demo: Res<crate::demo::DemoState>,
+    mut clock: ResMut<GameClock>,
+    mut ticks: EventWriter<CycleTick>,
+) {
+    if demo.playing() {
+        return;
+    }
+    clock.accum += time.delta_secs() * settings.speed.clamp(0.25, 4.0);
     // Emit a tick per whole cycle accumulated; keep the fractional remainder.
     while clock.accum >= CYCLE_SECS {
         clock.accum -= CYCLE_SECS;

@@ -5,7 +5,7 @@
 // sizing, door kinds, character count and party size.
 (
     name: "Sample Dungeon",
-    version: 6,
+    version: 7,
     limits: (
         max_levels: 14,
         floors_per_level: 5,
@@ -23,6 +23,7 @@
         event_flags: 64,
         max_event_delay: 63,
         demo_message_lines: 160,
+        max_demos: 6,
     ),
     levels: ["levels/level00.ron", "levels/level01.ron"],
     // Registered characters (≤ limits.max_characters) and the active party
@@ -38,6 +39,8 @@
     // Magic definitions (≤ limits.max_magic_kinds). Learned per-character in
     // characters.ron (`magics`) or via teaching scrolls (items.ron `teaches`).
     magics: "magics.ron",
+    // Demos (plan10): OP + mid-game cutscenes, started by StartDemo events.
+    demos: "demos.ron",
     // Per-project game rules (plan6.5). Hunger is enabled here as a data example;
     // omitting this whole block (or `enabled: false`) turns it off entirely.
     rules: (

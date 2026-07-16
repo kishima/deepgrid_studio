@@ -198,6 +198,7 @@ pub struct MagicProjectile {
 pub fn animate_projectiles(
     time: Res<Time>,
     mut commands: Commands,
+    mut se: EventWriter<crate::audio::PlaySe>,
     mut projectiles: Query<(Entity, &mut MagicProjectile, &mut Transform)>,
 ) {
     for (e, mut p, mut tf) in &mut projectiles {
@@ -205,6 +206,7 @@ pub fn animate_projectiles(
         let t = ((p.elapsed - p.delay) / p.dur).clamp(0.0, 1.0);
         tf.translation = p.from.lerp(p.to, t);
         if p.elapsed - p.delay >= p.dur {
+            se.send(crate::audio::PlaySe(crate::audio::Se::Impact));
             commands.entity(e).despawn();
         }
     }
@@ -226,6 +228,8 @@ pub struct SpawnGfx<'w> {
     pub meshes: ResMut<'w, Assets<Mesh>>,
     pub materials: ResMut<'w, Assets<StandardMaterial>>,
     pub asset_server: Res<'w, AssetServer>,
+    /// Sound-effect requests (plan10: cast chime).
+    pub se: EventWriter<'w, crate::audio::PlaySe>,
 }
 
 // ------------------------------------------------------------------ ally effects
@@ -471,6 +475,7 @@ pub fn cast_magic(
                 continue;
             };
             charge(&mut party);
+            gfx.se.send(crate::audio::PlaySe(crate::audio::Se::Cast));
             log.push(format!("{cname}は 『{}』を となえた!", def.name));
             let base = def.value.abs();
             let (_, mut mon) = monsters.get_mut(e).unwrap();
@@ -504,6 +509,7 @@ pub fn cast_magic(
         match &def.kind {
             MagicKind::Light { strength } => {
                 charge(&mut party);
+            gfx.se.send(crate::audio::PlaySe(crate::audio::Se::Cast));
                 let mult = light_multiplier(*strength);
                 boost.multiplier = if boost.remaining > 0 { boost.multiplier.max(mult) } else { mult };
                 boost.remaining = def.duration_cycles;
@@ -519,6 +525,7 @@ pub fn cast_magic(
                     continue;
                 };
                 charge(&mut party);
+            gfx.se.send(crate::audio::PlaySe(crate::audio::Se::Cast));
                 let max_hp = party.members[ti].effective_stats(&item_catalog).get(StatKind::MaxHp).max(1);
                 let hp = (max_hp * *ratio_percent as i32 / 100).clamp(1, max_hp);
                 let m = &mut party.members[ti];
@@ -540,6 +547,7 @@ pub fn cast_magic(
                     continue;
                 }
                 charge(&mut party);
+            gfx.se.send(crate::audio::PlaySe(crate::audio::Se::Cast));
                 let msg = apply_ally_magic(&mut party.members[ti], &def, &item_catalog, &rules.hunger);
                 log.push(format!("{cname}は 『{}』を となえた! {msg}", def.name));
             }

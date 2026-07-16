@@ -125,20 +125,17 @@ impl Keybinds {
     /// action's keys). Falls back to defaults when the file is missing/invalid.
     pub fn load() -> Self {
         let mut binds = Keybinds::default();
-        if let Ok(text) = std::fs::read_to_string(USER_SETTINGS_PATH)
-            && let Ok(user) = ron::from_str::<UserSettings>(&text)
-        {
-            for (action, name) in user.keybinds {
-                if let Some(key) = key_by_name(&name) {
-                    binds.rebind(action, key);
-                }
+        for (action, name) in UserSettings::load().keybinds {
+            if let Some(key) = key_by_name(&name) {
+                binds.rebind(action, key);
             }
         }
         binds
     }
 
     /// Persist the current bindings as user overrides (one key per action —
-    /// the last-bound key wins for display/persistence).
+    /// the last-bound key wins for display/persistence). Rewrites only the
+    /// keybind field; audio/speed settings in the same file are preserved.
     pub fn save(&self) -> Result<(), String> {
         let mut keybinds: Vec<(GameAction, String)> = Vec::new();
         for action in GameAction::ORDER {
@@ -148,22 +145,78 @@ impl Keybinds {
                 keybinds.push((action, name.to_string()));
             }
         }
-        let settings = UserSettings { keybinds };
-        let text = ron::ser::to_string_pretty(&settings, ron::ser::PrettyConfig::default())
-            .map_err(|e| format!("serialize settings: {e}"))?;
-        std::fs::write(USER_SETTINGS_PATH, text).map_err(|e| format!("write settings: {e}"))
+        let mut settings = UserSettings::load();
+        settings.keybinds = keybinds;
+        settings.save()
     }
 }
 
 /// Repo-root user settings file (gitignored).
 const USER_SETTINGS_PATH: &str = "user_settings.ron";
 
-/// On-disk user settings.
-#[derive(Serialize, Deserialize, Default)]
-struct UserSettings {
+/// On-disk user settings (plan10: audio volumes / footsteps / game speed join
+/// the plan9 keybinds). This is a Bevy resource too — play mode inserts the
+/// loaded value so audio and the clock read the user's preferences. All fields
+/// default individually, so files written by older builds still parse.
+#[derive(Resource, Serialize, Deserialize, Clone)]
+pub struct UserSettings {
     /// One key name per overridden action.
     #[serde(default)]
-    keybinds: Vec<(GameAction, String)>,
+    pub keybinds: Vec<(GameAction, String)>,
+    /// BGM volume, `0.0..=1.0`.
+    #[serde(default = "default_volume")]
+    pub bgm_volume: f32,
+    /// Sound-effect volume, `0.0..=1.0`.
+    #[serde(default = "default_volume")]
+    pub se_volume: f32,
+    /// Master mute (overrides both volumes).
+    #[serde(default)]
+    pub mute: bool,
+    /// Whether footstep sounds play.
+    #[serde(default = "default_true")]
+    pub footsteps: bool,
+    /// Game-time speed multiplier (0.5 / 1.0 / 2.0), applied in `tick_clock`.
+    #[serde(default = "default_speed")]
+    pub speed: f32,
+}
+
+fn default_volume() -> f32 {
+    0.8
+}
+fn default_true() -> bool {
+    true
+}
+fn default_speed() -> f32 {
+    1.0
+}
+
+impl Default for UserSettings {
+    fn default() -> Self {
+        Self {
+            keybinds: Vec::new(),
+            bgm_volume: default_volume(),
+            se_volume: default_volume(),
+            mute: false,
+            footsteps: default_true(),
+            speed: default_speed(),
+        }
+    }
+}
+
+impl UserSettings {
+    /// Read `user_settings.ron`, falling back to defaults if missing/invalid.
+    pub fn load() -> Self {
+        std::fs::read_to_string(USER_SETTINGS_PATH)
+            .ok()
+            .and_then(|text| ron::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self) -> Result<(), String> {
+        let text = ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+            .map_err(|e| format!("serialize settings: {e}"))?;
+        std::fs::write(USER_SETTINGS_PATH, text).map_err(|e| format!("write settings: {e}"))
+    }
 }
 
 /// The keys the settings UI can bind, as `(name, KeyCode)`. A modest,

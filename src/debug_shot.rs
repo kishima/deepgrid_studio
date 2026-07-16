@@ -101,6 +101,7 @@ pub fn editor_shot_tab() -> Option<crate::editor::Tab> {
         Some("editor-monsters") => Some(Tab::Monsters),
         Some("editor-magics") => Some(Tab::Magics),
         Some("editor-events") => Some(Tab::Events),
+        Some("editor-demos") => Some(Tab::Demos),
         Some("editor-settings") => Some(Tab::Settings),
         _ => None,
     }

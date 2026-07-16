@@ -4,6 +4,7 @@
 //! (the 3D runtime) or edit mode (the egui map editor). All logic lives in the
 //! modules.
 
+mod audio;
 mod autotest;
 mod character;
 mod clock;
@@ -11,6 +12,7 @@ mod combat;
 mod config;
 mod data_screen;
 mod debug_shot;
+mod demo;
 mod dungeon;
 mod editor;
 mod event;
@@ -28,6 +30,7 @@ mod project;
 mod render;
 mod rng;
 mod rules;
+mod save;
 mod settings;
 mod world;
 
@@ -49,15 +52,17 @@ use rng::GameRng;
 /// Default project loaded when `--project` is not given.
 const DEFAULT_PROJECT: &str = "assets/projects/sample";
 
-/// Parsed command line (plan3「起動モード」).
+/// Parsed command line (plan3「起動モード」; plan10 adds `--load <slot>`).
 struct Cli {
     edit: bool,
     project_dir: PathBuf,
+    load_slot: Option<usize>,
 }
 
 fn parse_cli() -> Cli {
     let mut edit = false;
     let mut project_dir = PathBuf::from(DEFAULT_PROJECT);
+    let mut load_slot = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -68,10 +73,19 @@ fn parse_cli() -> Cli {
                     .map(PathBuf::from)
                     .unwrap_or_else(|| panic!("--project requires a directory argument"));
             }
+            "--load" => {
+                load_slot = args
+                    .next()
+                    .and_then(|s| s.parse().ok())
+                    .filter(|s| (1..=save::SLOTS).contains(s));
+                if load_slot.is_none() {
+                    panic!("--load requires a slot number 1..={}", save::SLOTS);
+                }
+            }
             other => eprintln!("deepgrid_studio: ignoring unknown argument '{other}'"),
         }
     }
-    Cli { edit, project_dir }
+    Cli { edit, project_dir, load_slot }
 }
 
 fn main() {
@@ -85,13 +99,30 @@ fn main() {
     if cli.edit || debug_shot::wants_editor() {
         editor::run(project);
     } else {
-        run_play(project);
+        // plan10 `override` scene: drop a temporary wall-texture override into
+        // the project (the ceiling rock — visibly different from the bricks)
+        // so the shot proves the swap, then clean it up so other scenes and
+        // the repo stay untouched.
+        let override_scene = debug_shot::debug_shot_value().as_deref() == Some("override");
+        let override_file = cli.project_dir.join("override/textures/wall_bricks066_color.png");
+        if override_scene {
+            if let Some(parent) = override_file.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+            std::fs::copy("assets/textures/ceiling_rock058_color.png", &override_file).ok();
+        }
+        run_play(project, cli.load_slot);
+        if override_scene {
+            std::fs::remove_file(&override_file).ok();
+            let _ = std::fs::remove_dir(cli.project_dir.join("override/textures"));
+            let _ = std::fs::remove_dir(cli.project_dir.join("override"));
+        }
     }
 }
 
 /// Build and run the play-mode app: load the project's level 0 into the 3D
 /// runtime (plan1/plan2 systems).
-fn run_play(project: Project) {
+fn run_play(project: Project, load_slot: Option<usize>) {
     // Doors start closed unless the level's `!`/`@` glyphs mark a kind open (v6).
     let doors = world::doors_for(&project.levels[0], None, project.limits.door_kinds_per_level);
     let dungeon = project.levels[0].to_dungeon();
@@ -129,6 +160,18 @@ fn run_play(project: Project) {
     .insert_resource(initial_monsters)
     .insert_resource(ScriptedInput::default())
     .insert_resource(settings::Keybinds::load())
+    .insert_resource(settings::UserSettings::load())
+    .insert_resource(project::AssetResolver { project_dir: project.dir.clone() })
+    // plan10: audio + demos.
+    .init_resource::<audio::BgmState>()
+    .init_resource::<demo::DemoState>()
+    .insert_resource(demo::DemoCatalog(project.demos.clone()))
+    .insert_resource(save::PendingCliLoad(load_slot))
+    .init_resource::<world::SkipNextSnapshot>()
+    .add_event::<audio::PlaySe>()
+    .add_event::<demo::StartDemoReq>()
+    .add_event::<save::SaveRequest>()
+    .add_event::<save::LoadRequest>()
     .init_resource::<settings::KeyConfig>()
     .insert_resource(MessageLog::default())
     .insert_resource(GameClock::default())
@@ -227,6 +270,7 @@ fn run_play(project: Project) {
             data_screen::data_screen_drag.after(data_screen::data_screen_interactions),
             data_screen::data_magic_interactions.after(data_screen::data_screen_interactions),
             floor_items::handle_place.after(data_screen::data_screen_interactions),
+            data_screen::save_slot_clicks,
             data_screen::toggle_data_screen,
             data_screen::refresh_data_screen.after(data_screen::toggle_data_screen),
             data_screen::refresh_magic_screen.after(data_screen::toggle_data_screen),
@@ -260,6 +304,12 @@ fn run_play(project: Project) {
                 .after(event::front_interact)
                 .after(event::entry_triggers)
                 .after(monster::monster_lifecycle),
+            // plan10: saves. Save freezes after this frame's game systems; load
+            // rewrites globals then rebuilds via the normal transition below.
+            save::handle_save
+                .after(event::run_events)
+                .after(monster::monster_lifecycle),
+            save::handle_load.after(save::handle_save).before(world::level_transition),
             world::level_transition
                 .after(event::run_events)
                 .after(event::entry_triggers),
@@ -270,6 +320,31 @@ fn run_play(project: Project) {
                 .after(event::run_events)
                 .after(world::level_transition)
                 .after(player::player_movement),
+        ),
+    )
+    // plan10: audio (SE after their producers, BGM follows level/override) and
+    // demo playback (start requests come from run_events).
+    .add_systems(
+        Update,
+        (
+            audio::sync_level_bgm.after(world::level_transition),
+            audio::update_bgm.after(audio::sync_level_bgm).after(demo::drive_demo),
+            audio::play_se
+                .after(player::player_movement)
+                .after(monster::player_actions)
+                .after(monster::monster_attacks)
+                .after(magic::cast_magic)
+                .after(magic::animate_projectiles)
+                .after(floor_items::handle_pickup)
+                .after(event::run_events)
+                .after(character::apply_fall_damage),
+            audio::level_up_se
+                .after(monster::player_actions)
+                .after(monster::monster_lifecycle)
+                .before(audio::play_se),
+            demo::debug_demo_driver,
+            demo::start_demo.after(event::run_events).after(demo::debug_demo_driver),
+            demo::drive_demo.after(demo::start_demo),
         ),
     )
     .add_systems(

@@ -9,6 +9,10 @@ fn default_pouch_size() -> usize {
 fn default_backpack_size() -> usize {
     24
 }
+/// Demo count guideline: OP + ED + 4 mid-game demos (plan10).
+fn default_max_demos() -> usize {
+    6
+}
 
 /// Quantity limits for a project (the game being authored). Defaults match the
 /// original "Dandan Dungeon" (project.md「上限値の扱い」), but every value is
@@ -58,6 +62,9 @@ pub struct LimitsConfig {
     pub max_event_delay: usize,
     /// Maximum message lines in a demo.
     pub demo_message_lines: usize,
+    /// Maximum demos per project (plan10). Defaulted so v6 projects load.
+    #[serde(default = "default_max_demos")]
+    pub max_demos: usize,
 }
 
 impl Default for LimitsConfig {
@@ -82,6 +89,7 @@ impl Default for LimitsConfig {
             event_flags: 64,
             max_event_delay: 63,
             demo_message_lines: 160,
+            max_demos: 6,
         }
     }
 }

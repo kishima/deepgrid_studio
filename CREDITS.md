@@ -56,6 +56,42 @@ assets/projects/sample/portraits/ の5枚。Wikimedia Commons から取得した
 | portraits/rogue.png | ギュスターヴ・ドレ「ユダの接吻」(聖書挿絵、1866) | https://commons.wikimedia.org/wiki/File:Gustave_Doré_-_The_Holy_Bible_-_Plate_CXLI,_The_Judas_Kiss.jpg | パブリックドメイン | 2026-07-14 |
 | portraits/barbarian.png | ギュスターヴ・ドレ「獅子を裂くサムソン」(聖書挿絵、1866) | https://commons.wikimedia.org/wiki/File:060.Samson_Slays_a_Lion.jpg | パブリックドメイン | 2026-07-14 |
 
+## 音源(効果音・BGM)
+
+plan10 で導入。全件 CC0 1.0(パブリックドメイン相当。帰属表記不要・商用利用可)。
+効果音は Kenney.nl の各パック(パック同梱 License.txt に CC0 明記)、
+BGM は OpenGameArt.org(各アートページのライセンス欄で CC0 を確認)。
+MP3/WAV 配布のものは ffmpeg で OGG (q5) に変換して収録。
+アーカイブ原本・変換前ファイルはコミットしない。
+
+### 効果音(assets/audio/se/)
+
+| 素材 | 入手元 | ライセンス | ファイル | 用途 | 導入日 |
+| --- | --- | --- | --- | --- | --- |
+| Impact Sounds — footstep_concrete_000 | https://kenney.nl/assets/impact-sounds | CC0 1.0 | assets/audio/se/footstep.ogg | 足音 | 2026-07-15 |
+| RPG Audio — doorOpen_1 | https://kenney.nl/assets/rpg-audio | CC0 1.0 | assets/audio/se/door_open.ogg | ドア開 | 2026-07-15 |
+| RPG Audio — doorClose_1 | https://kenney.nl/assets/rpg-audio | CC0 1.0 | assets/audio/se/door_close.ogg | ドア閉 | 2026-07-15 |
+| RPG Audio — knifeSlice | https://kenney.nl/assets/rpg-audio | CC0 1.0 | assets/audio/se/melee_hit.ogg | 攻撃ヒット | 2026-07-15 |
+| Digital Audio — phaserUp2 | https://kenney.nl/assets/digital-audio | CC0 1.0 | assets/audio/se/spell_cast.ogg | 魔法詠唱 | 2026-07-15 |
+| Impact Sounds — impactBell_heavy_002 | https://kenney.nl/assets/impact-sounds | CC0 1.0 | assets/audio/se/magic_impact.ogg | 光弾着弾 | 2026-07-15 |
+| Impact Sounds — impactSoft_heavy_001 | https://kenney.nl/assets/impact-sounds | CC0 1.0 | assets/audio/se/fall_thud.ogg | 落下着地 | 2026-07-15 |
+| RPG Audio — handleCoins | https://kenney.nl/assets/rpg-audio | CC0 1.0 | assets/audio/se/item_pickup.ogg | 拾う | 2026-07-15 |
+| Digital Audio — powerUp5 | https://kenney.nl/assets/digital-audio | CC0 1.0 | assets/audio/se/level_up.ogg | レベルアップ | 2026-07-15 |
+| RPG Audio — metalClick | https://kenney.nl/assets/rpg-audio | CC0 1.0 | assets/audio/se/switch_click.ogg | スイッチ/しかけ床 | 2026-07-15 |
+| Digital Audio — phaseJump1 | https://kenney.nl/assets/digital-audio | CC0 1.0 | assets/audio/se/warp.ogg | ワープ | 2026-07-15 |
+
+### BGM(assets/audio/bgm/)
+
+| 素材 | 作者 | 入手元 | ライセンス | ファイル | 導入日 |
+| --- | --- | --- | --- | --- | --- |
+| Dungeon Ambience | yd | https://opengameart.org/content/dungeon-ambience | CC0 1.0 | assets/audio/bgm/bgm_dungeon1.ogg | 2026-07-15 |
+| Wander in a dungeon | Kosmo The Cat | https://opengameart.org/content/wander-in-a-dungeon | CC0 1.0 | assets/audio/bgm/bgm_dungeon2.ogg | 2026-07-15 |
+| Battle Theme A | cynicmusic (pixelsphere.org) | https://opengameart.org/content/battle-theme-a | CC0 1.0 | assets/audio/bgm/bgm_battle.ogg | 2026-07-15 |
+| Calming RPG Town Theme | Destin715 | https://opengameart.org/content/calming-rpg-town-theme | CC0 1.0 | assets/audio/bgm/bgm_town.ogg | 2026-07-15 |
+| Mysterious Ambience (song21) | cynicmusic (pixelsphere.org) | https://opengameart.org/content/mysterious-ambience-song21 | CC0 1.0(複数ライセンス提示から CC0 を選択) | assets/audio/bgm/bgm_mysterious.ogg | 2026-07-15 |
+| Tension Theme | Umplix | https://opengameart.org/content/tension-theme | CC0 1.0 | assets/audio/bgm/bgm_tension.ogg | 2026-07-15 |
+| Victory Theme for RPG | cynicmusic (pixelsphere.org) | https://opengameart.org/content/victory-theme-for-rpg | CC0 1.0 | assets/audio/bgm/bgm_ending.ogg | 2026-07-15 |
+
 ## 自作・生成素材
 
 (まだなし。追加時は生成スクリプトのパスと生成手順をここに記録する。

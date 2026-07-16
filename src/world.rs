@@ -39,7 +39,7 @@ pub struct GameLevels {
 }
 
 /// A frozen monster for the saved level state.
-#[derive(Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct MonsterSnapshot {
     pub def_id: String,
     pub hp: i32,
@@ -52,14 +52,15 @@ pub struct MonsterSnapshot {
 }
 
 /// A saved floor item.
-#[derive(Clone, Debug)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
 pub struct FloorItemSnapshot {
     pub instance: ItemInstance,
     pub pos: GridPos,
 }
 
 /// One level's saved runtime state (plan8). Absent = never visited (build fresh).
-#[derive(Clone, Default)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct LevelState {
     pub monsters: Vec<MonsterSnapshot>,
     pub items: Vec<FloorItemSnapshot>,
@@ -110,6 +111,48 @@ fn block_diffs(orig: &Level, cur: &Level) -> Vec<((i32, i32, usize), Block)> {
     out
 }
 
+/// Freeze the loaded level's runtime state (monsters / floor items / doors /
+/// triggers / block diffs). Used on every level transition and by saves
+/// (plan10), so both always agree on what "level state" means.
+pub fn snapshot_level<'a>(
+    orig: &LevelData,
+    dungeon: &Dungeon,
+    doors: &DoorStates,
+    triggers: &TriggerStates,
+    kinds: usize,
+    monsters: impl IntoIterator<Item = &'a Monster>,
+    items: impl IntoIterator<Item = &'a FloorItem>,
+) -> LevelState {
+    LevelState {
+        monsters: monsters
+            .into_iter()
+            .map(|m| MonsterSnapshot {
+                def_id: m.def_id.clone(),
+                hp: m.hp,
+                pos: m.pos,
+                facing: m.facing,
+                dead: m.dead,
+                dead_cycle: m.dead_cycle,
+                fleeing: m.fleeing,
+                carry: m.carry.clone(),
+            })
+            .collect(),
+        items: items
+            .into_iter()
+            .map(|it| FloorItemSnapshot { instance: it.instance.clone(), pos: it.pos })
+            .collect(),
+        doors_open: (0..kinds).filter(|&k| doors.is_open(k as u8)).map(|k| k as u8).collect(),
+        triggers: triggers.clone(),
+        block_diffs: block_diffs(&orig.level, &dungeon.level),
+    }
+}
+
+/// When set, the next `level_transition` skips snapshotting the level being
+/// left. Load (plan10) sets this: the pre-load runtime state must not clobber
+/// the just-restored `LevelStates`.
+#[derive(Resource, Default)]
+pub struct SkipNextSnapshot(pub bool);
+
 /// The core level resources a transition rewrites, bundled to fit the parameter
 /// limit.
 #[derive(SystemParam)]
@@ -138,35 +181,18 @@ pub fn level_transition(
     scoped: Query<Entity, With<LevelScoped>>,
     monsters_q: Query<&Monster>,
     items_q: Query<&FloorItem>,
+    mut skip_snapshot: ResMut<SkipNextSnapshot>,
 ) {
     let Some(t) = ev.read().last().copied() else { return };
     let kinds = limits.door_kinds_per_level;
 
-    // --- snapshot the level being left ---
+    // --- snapshot the level being left (skipped right after a load, which has
+    //     already restored the authoritative LevelStates) ---
     let from = lr.current.0;
-    if let Some(orig) = game_levels.levels.get(from) {
-        let st = LevelState {
-            monsters: monsters_q
-                .iter()
-                .map(|m| MonsterSnapshot {
-                    def_id: m.def_id.clone(),
-                    hp: m.hp,
-                    pos: m.pos,
-                    facing: m.facing,
-                    dead: m.dead,
-                    dead_cycle: m.dead_cycle,
-                    fleeing: m.fleeing,
-                    carry: m.carry.clone(),
-                })
-                .collect(),
-            items: items_q
-                .iter()
-                .map(|it| FloorItemSnapshot { instance: it.instance.clone(), pos: it.pos })
-                .collect(),
-            doors_open: (0..kinds).filter(|&k| lr.doors.is_open(k as u8)).map(|k| k as u8).collect(),
-            triggers: lr.triggers.clone(),
-            block_diffs: block_diffs(&orig.level, &lr.dungeon.level),
-        };
+    if skip_snapshot.0 {
+        skip_snapshot.0 = false;
+    } else if let Some(orig) = game_levels.levels.get(from) {
+        let st = snapshot_level(orig, &lr.dungeon, &lr.doors, &lr.triggers, kinds, &monsters_q, &items_q);
         lr.states.map.insert(from, st);
     }
 
@@ -196,7 +222,6 @@ pub fn level_transition(
         spawn_level_mesh(
             &mut commands,
             palette,
-            &assets.asset_server,
             &mut assets.meshes,
             &mut assets.materials,
             &lr.dungeon.level,

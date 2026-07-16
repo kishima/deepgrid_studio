@@ -63,17 +63,19 @@ pub enum Tab {
     Monsters,
     Magics,
     Events,
+    Demos,
     Settings,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 7] = [
+    pub const ALL: [Tab; 8] = [
         Tab::Map,
         Tab::Characters,
         Tab::Items,
         Tab::Monsters,
         Tab::Magics,
         Tab::Events,
+        Tab::Demos,
         Tab::Settings,
     ];
     pub fn label(self) -> &'static str {
@@ -84,6 +86,7 @@ impl Tab {
             Tab::Monsters => "モンスター",
             Tab::Magics => "魔法",
             Tab::Events => "イベント",
+            Tab::Demos => "デモ",
             Tab::Settings => "設定",
         }
     }
@@ -143,6 +146,11 @@ pub struct EditorState {
     pub sel_monster: usize,
     pub sel_magic: usize,
     pub sel_event: usize,
+    pub sel_demo: usize,
+    /// Lazily-scanned `assets/audio/bgm/` file names (for the BGM combos).
+    pub bgm_files: Option<Vec<String>>,
+    /// Lazily-scanned `<project>/override/` relative paths (settings tab list).
+    pub override_files: Option<Vec<String>>,
     pub status: String,
     pub cursor: Option<(i32, i32)>,
     pub warnings: Vec<String>,
@@ -188,6 +196,9 @@ impl EditorState {
             sel_monster: 0,
             sel_magic: 0,
             sel_event: 0,
+            sel_demo: 0,
+            bgm_files: None,
+            override_files: None,
             status: "Ready".to_string(),
             cursor: None,
             warnings: Vec::new(),
@@ -301,6 +312,7 @@ impl EditorState {
         self.sel_item = self.sel_item.min(self.proj.items.len().saturating_sub(1));
         self.sel_monster = self.sel_monster.min(self.proj.monsters.len().saturating_sub(1));
         self.sel_magic = self.sel_magic.min(self.proj.magics.len().saturating_sub(1));
+        self.sel_demo = self.sel_demo.min(self.proj.demos.len().saturating_sub(1));
     }
 
     /// Recompute the validation warning list (on save / tab switch / structural edit).
@@ -613,6 +625,7 @@ impl EditorState {
             stairs_links: Vec::new(),
             events: Vec::new(),
             open_doors: Vec::new(),
+            bgm: String::new(),
         };
         let n = self.proj.levels.len();
         self.proj.level_paths.push(format!("levels/level{n:02}.ron"));
@@ -719,7 +732,9 @@ fn edit3d_setup_resources(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let palette = crate::render::build_palette(&asset_server, &mut meshes, &mut materials);
+    let resolver = crate::project::AssetResolver { project_dir: state.proj.dir.clone() };
+    let palette = crate::render::build_palette(&asset_server, &resolver, &mut meshes, &mut materials);
+    commands.insert_resource(resolver);
     commands.insert_resource(palette);
     let lvl = &state.proj.levels[0];
     commands.insert_resource(Dungeon {
@@ -748,6 +763,7 @@ mod tests {
             stairs_links: Vec::new(),
             events: Vec::new(),
             open_doors: Vec::new(),
+            bgm: String::new(),
         };
         Project {
             dir: std::path::PathBuf::from("/tmp/does-not-exist"),
@@ -762,10 +778,12 @@ mod tests {
             magics: Vec::new(),
             rules: crate::rules::RulesConfig::default(),
             initial_flags: Vec::new(),
+            demos: Vec::new(),
             characters_path: String::new(),
             items_path: String::new(),
             monsters_path: String::new(),
             magics_path: String::new(),
+            demos_path: String::new(),
         }
     }
 

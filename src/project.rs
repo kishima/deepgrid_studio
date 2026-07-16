@@ -63,6 +63,9 @@ struct ProjectMeta {
     /// so older projects load with every flag off.
     #[serde(default)]
     initial_flags: Vec<usize>,
+    /// Demos file, project-relative (v7, plan10). Empty = no demos.
+    #[serde(default)]
+    demos: String,
 }
 
 /// One floor of the on-disk map: `height` rows of `width` characters.
@@ -99,6 +102,9 @@ struct MapFile {
     /// Events attached to this level (map v6).
     #[serde(default)]
     events: Vec<EventDef>,
+    /// BGM file name under `assets/audio/bgm/` (map v7, plan10; "" = silence).
+    #[serde(default)]
+    bgm: String,
 }
 
 /// One writable-wall message (plan8). Kept out of `Block` so the block stays
@@ -140,6 +146,8 @@ pub struct LevelData {
     pub events: Vec<EventDef>,
     /// Door kinds that start open on this level (derived from `!`/`@` glyphs).
     pub open_doors: Vec<u8>,
+    /// BGM file name under `assets/audio/bgm/` (plan10; "" = silence).
+    pub bgm: String,
 }
 
 impl LevelData {
@@ -182,8 +190,8 @@ impl LevelData {
 
 /// Project-format version this build writes. Older versions are still accepted
 /// on load (v1: no characters; v2: no items; v3: no monsters; v4: no magic;
-/// v5: no events/gimmicks).
-pub const PROJECT_VERSION: u32 = 6;
+/// v5: no events/gimmicks; v6: no demos/BGM).
+pub const PROJECT_VERSION: u32 = 7;
 
 /// A loaded project: metadata, limits, levels, registered characters + party
 /// roster (v2+), and item definitions (v3+). `Clone` so the editor (plan9) can
@@ -209,6 +217,8 @@ pub struct Project {
     pub rules: RulesConfig,
     /// Event flags that start ON (plan9).
     pub initial_flags: Vec<usize>,
+    /// Authored demos (v7, plan10).
+    pub demos: Vec<crate::demo::DemoDef>,
     /// Relative file names loaded from `project.ron`, kept so Save All (plan9)
     /// writes the same paths. Empty ⇒ the conventional default name is used when
     /// the matching data is non-empty.
@@ -216,6 +226,7 @@ pub struct Project {
     pub items_path: String,
     pub monsters_path: String,
     pub magics_path: String,
+    pub demos_path: String,
 }
 
 impl Project {
@@ -588,6 +599,7 @@ fn level_from_map(map: &MapFile, limits: &LimitsConfig, what: &str) -> Result<Le
         stairs_links: map.stairs_links.clone(),
         events: map.events.clone(),
         open_doors,
+        bgm: map.bgm.clone(),
     })
 }
 
@@ -632,6 +644,7 @@ fn map_from_level(data: &LevelData) -> MapFile {
         wall_texts: data.wall_texts.clone(),
         stairs_links: data.stairs_links.clone(),
         events: data.events.clone(),
+        bgm: data.bgm.clone(),
     }
 }
 
@@ -734,6 +747,16 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
         magics_from_ron(&text, &meta.limits, &meta.magics)?
     };
 
+    // Demos (v7, plan10). Pre-v7 projects load with no demos.
+    let demos = if meta.demos.is_empty() {
+        Vec::new()
+    } else {
+        let path = dir.join(&meta.demos);
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+        demos_from_ron(&text, &meta.limits, &meta.demos)?
+    };
+
     // Cross-check placements + starting items reference known item ids.
     let known = |id: &str| items.iter().any(|d| d.id == id);
     let known_monster = |id: &str| monsters.iter().any(|d| d.id == id);
@@ -806,11 +829,77 @@ pub fn load_project(dir: impl AsRef<Path>) -> Result<Project, String> {
         magics,
         rules: meta.rules,
         initial_flags: meta.initial_flags,
+        demos,
         characters_path: meta.characters,
         items_path: meta.items,
         monsters_path: meta.monsters,
         magics_path: meta.magics,
+        demos_path: meta.demos,
     })
+}
+
+/// Parse + validate `demos.ron` (plan10): unique ids, count and line limits.
+pub fn demos_from_ron(
+    text: &str,
+    limits: &LimitsConfig,
+    what: &str,
+) -> Result<Vec<crate::demo::DemoDef>, String> {
+    let demos: Vec<crate::demo::DemoDef> =
+        ron::from_str(text).map_err(|e| format!("failed to parse {what}: {e}"))?;
+    if demos.len() > limits.max_demos {
+        return Err(format!("{what} defines {} demos, exceeds max_demos {}", demos.len(), limits.max_demos));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for d in &demos {
+        if d.id.is_empty() {
+            return Err(format!("{what}: a demo has an empty id"));
+        }
+        if !seen.insert(d.id.as_str()) {
+            return Err(format!("{what}: duplicate demo id '{}'", d.id));
+        }
+        if d.lines.len() > limits.demo_message_lines {
+            return Err(format!(
+                "{what}: demo '{}' has {} lines, exceeds demo_message_lines {}",
+                d.id,
+                d.lines.len(),
+                limits.demo_message_lines
+            ));
+        }
+    }
+    Ok(demos)
+}
+
+/// The loaded project's directory as a resource, so asset loads can consult its
+/// `override/` directory (plan10). Inserted by both play mode and the editor.
+#[derive(bevy::prelude::Resource, Clone)]
+pub struct AssetResolver {
+    pub project_dir: PathBuf,
+}
+
+impl AssetResolver {
+    pub fn resolve(&self, rel: &str) -> String {
+        resolve_asset(&self.project_dir, rel)
+    }
+}
+
+/// Resolve a built-in asset path against the project's `override/` directory
+/// (plan10 graphics swap): if `<project>/override/<rel>` exists on disk, its
+/// asset path is returned; otherwise `rel` itself (the built-in). `rel` is an
+/// asset path relative to `assets/` (e.g. `"textures/wall.png"`); the project
+/// dir must live under `assets/` for the override to be loadable.
+pub fn resolve_asset(project_dir: &Path, rel: &str) -> String {
+    let candidate = project_dir.join("override").join(rel);
+    if candidate.is_file() {
+        // Asset paths are relative to assets/ — strip the leading "assets/".
+        let s = candidate.to_string_lossy().replace('\\', "/");
+        if let Some(stripped) = s.strip_prefix("assets/") {
+            return stripped.to_string();
+        }
+        if let Some(idx) = s.find("/assets/") {
+            return s[idx + "/assets/".len()..].to_string();
+        }
+    }
+    rel.to_string()
 }
 
 /// Write the whole project back to disk (plan9 "Save All"): `project.ron` plus
@@ -836,6 +925,7 @@ pub fn save_project(project: &Project) -> Result<(), Vec<String>> {
     let items_file = name_or(&project.items_path, "items.ron", !project.items.is_empty());
     let monsters_file = name_or(&project.monsters_path, "monsters.ron", !project.monsters.is_empty());
     let magics_file = name_or(&project.magics_path, "magics.ron", !project.magics.is_empty());
+    let demos_file = name_or(&project.demos_path, "demos.ron", !project.demos.is_empty());
 
     let write_ron = |errors: &mut Vec<String>, rel: &str, contents: Result<String, String>| {
         if rel.is_empty() {
@@ -858,6 +948,7 @@ pub fn save_project(project: &Project) -> Result<(), Vec<String>> {
     write_ron(&mut errors, &items_file, ron::ser::to_string_pretty(&project.items, pretty()).map_err(|e| format!("items: {e}")));
     write_ron(&mut errors, &monsters_file, ron::ser::to_string_pretty(&project.monsters, pretty()).map_err(|e| format!("monsters: {e}")));
     write_ron(&mut errors, &magics_file, ron::ser::to_string_pretty(&project.magics, pretty()).map_err(|e| format!("magics: {e}")));
+    write_ron(&mut errors, &demos_file, ron::ser::to_string_pretty(&project.demos, pretty()).map_err(|e| format!("demos: {e}")));
 
     // Levels.
     for (rel, level) in project.level_paths.iter().zip(&project.levels) {
@@ -884,6 +975,7 @@ pub fn save_project(project: &Project) -> Result<(), Vec<String>> {
         magics: magics_file,
         rules: project.rules.clone(),
         initial_flags: project.initial_flags.clone(),
+        demos: demos_file,
     };
     match ron::ser::to_string_pretty(&meta, pretty()) {
         Ok(text) => {
@@ -948,6 +1040,7 @@ mod tests {
             stairs_links: Vec::new(),
             events: Vec::new(),
             open_doors: Vec::new(),
+            bgm: String::new(),
         }
     }
 
@@ -1168,6 +1261,47 @@ mod tests {
     }
 
     #[test]
+    fn v6_meta_and_level_without_plan10_fields_parse() {
+        // Backward compat (plan10): a v6 project.ron (no demos file, no
+        // max_demos limit) and a v6 level (no bgm) still parse with defaults.
+        let meta: ProjectMeta = ron::from_str(
+            r#"(name: "old", version: 6,
+                limits: (max_levels: 1, floors_per_level: 1, floor_width: 3,
+                         floor_height: 3, door_kinds_per_level: 2,
+                         max_characters: 1, party_size: 1, max_item_kinds: 1,
+                         item_placements_per_level: 1, max_monster_kinds: 1,
+                         monster_kinds_per_level: 1, monster_placements_per_level: 1,
+                         max_magic_kinds: 1, event_flags: 4, max_event_delay: 3,
+                         demo_message_lines: 160),
+                levels: ["levels/level00.ron"])"#,
+        )
+        .expect("v6 meta parses");
+        assert_eq!(meta.demos, "");
+        assert_eq!(meta.limits.max_demos, 6);
+
+        let text = r#"(width: 2, height: 1, start_x: 0, start_y: 0, start_floor: 0,
+            start_facing: North, floors: [(rows: [".."])])"#;
+        let lvl = level_from_ron(text, &LimitsConfig::default(), "lvl").expect("v6 level parses");
+        assert_eq!(lvl.bgm, "");
+    }
+
+    #[test]
+    fn demos_ron_limits_are_enforced() {
+        let limits = LimitsConfig { max_demos: 1, ..LimitsConfig::default() };
+        let ok = demos_from_ron(r#"[(id: "op", lines: ["a"])]"#, &limits, "demos.ron");
+        assert!(ok.is_ok());
+        let too_many =
+            demos_from_ron(r#"[(id: "a", lines: []), (id: "b", lines: [])]"#, &limits, "demos.ron");
+        assert!(too_many.unwrap_err().contains("max_demos"));
+        let dup = demos_from_ron(
+            r#"[(id: "a", lines: []), (id: "a", lines: [])]"#,
+            &LimitsConfig::default(),
+            "demos.ron",
+        );
+        assert!(dup.unwrap_err().contains("duplicate"));
+    }
+
+    #[test]
     fn sample_project_loads() {
         // Guards every sample RON file (project/characters/items/level) against
         // schema drift — the same load path the runtime uses.
@@ -1201,10 +1335,12 @@ mod tests {
             magics: vec![],
             rules: RulesConfig::default(),
             initial_flags: vec![],
+            demos: vec![],
             characters_path: "characters.ron".into(),
             items_path: String::new(),
             monsters_path: String::new(),
             magics_path: String::new(),
+            demos_path: String::new(),
         };
         let party = project.build_party();
         assert_eq!(party.len(), 1);

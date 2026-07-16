@@ -140,6 +140,7 @@ pub fn handle_pickup(
     mut party: ResMut<Party>,
     catalog: Res<ItemCatalog>,
     mut log: ResMut<MessageLog>,
+    mut se: EventWriter<crate::audio::PlaySe>,
     items: Query<(Entity, &FloorItem)>,
 ) {
     for _ in requests.read() {
@@ -165,6 +166,7 @@ pub fn handle_pickup(
             Ok(_) => {
                 commands.entity(entity).despawn_recursive();
                 log.push(format!("{name}を拾った"));
+                se.send(crate::audio::PlaySe(crate::audio::Se::Pickup));
             }
             Err(_) => log.push(format!("{name}を持ちきれない")),
         }

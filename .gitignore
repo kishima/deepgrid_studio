@@ -4,3 +4,6 @@ debug-shot.png
 *.ron.bak
 tmp/
 user_settings.ron
+
+# plan10: play-mode saves (created by autotest / manual play)
+assets/projects/*/saves/

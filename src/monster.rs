@@ -803,6 +803,16 @@ pub enum PlayerAction {
 use crate::game_state::SelectedMember;
 
 #[allow(clippy::too_many_arguments)]
+/// Mesh/material/asset-server trio, bundled so `player_actions` (plan10 adds
+/// the SE writer) stays within Bevy's 16-parameter system limit.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct MonsterAssets<'w> {
+    pub meshes: ResMut<'w, Assets<Mesh>>,
+    pub materials: ResMut<'w, Assets<StandardMaterial>>,
+    pub asset_server: Res<'w, AssetServer>,
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn player_actions(
     mut commands: Commands,
     mut actions: EventReader<PlayerAction>,
@@ -816,10 +826,9 @@ pub fn player_actions(
     mut rng: ResMut<GameRng>,
     mut rot: ResMut<AttackRotation>,
     mut log: ResMut<MessageLog>,
+    mut se: EventWriter<crate::audio::PlaySe>,
     mut monsters: Query<(Entity, &mut Monster)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    asset_server: Res<AssetServer>,
+    mut assets: MonsterAssets,
 ) {
     let (fdx, fdy) = player.facing.delta();
     let front = GridPos::new(player.pos.x + fdx, player.pos.y + fdy, player.pos.floor);
@@ -877,10 +886,11 @@ pub fn player_actions(
                 // Whirl to face whoever just hit it.
                 mon.facing = facing_toward(mon.pos, player.pos);
                 log.push(format!("{a_name}の こうげき! {}に {dmg}のダメージ", mdef.name));
+                se.send(crate::audio::PlaySe(crate::audio::Se::AttackHit));
                 if mon.hp <= 0 {
                     kill_monster(
                         &mut commands, &mut mon, &mdef, clock.cycle, &mut party, &mut log,
-                        &mut meshes, &mut materials, &asset_server, &item_catalog,
+                        &mut assets.meshes, &mut assets.materials, &assets.asset_server, &item_catalog,
                     );
                 }
             }
@@ -888,7 +898,7 @@ pub fn player_actions(
                 throw_item(
                     &mut commands, &mut party, selected.index, &item_catalog, &catalog,
                     &player, &dungeon, clock.cycle, &mut rng, &mut log, &mut monsters,
-                    &mut meshes, &mut materials, &asset_server,
+                    &mut assets.meshes, &mut assets.materials, &assets.asset_server,
                 );
             }
             PlayerAction::Steal => {
@@ -1069,14 +1079,15 @@ fn steal_from(
         log.push(format!("{name}は 盗みに失敗した!"));
         // Immediate counterattack (ignores attack_freq).
         mon.next_attack = cycle; // let the attack system fire next cycle
-        monster_hit_party(&mdef, party, rng, log);
+        let _ = monster_hit_party(&mdef, party, rng, log);
     }
 }
 
 // ------------------------------------------------------------------ combat: monster attacks
 
-/// Deal one monster attack to a random living member (guard halves).
-fn monster_hit_party(def: &MonsterDef, party: &mut Party, rng: &mut GameRng, log: &mut MessageLog) {
+/// Deal one monster attack to a random living member (guard halves). Returns
+/// whether the blow landed (drives the hit SE, plan10).
+fn monster_hit_party(def: &MonsterDef, party: &mut Party, rng: &mut GameRng, log: &mut MessageLog) -> bool {
     let alive: Vec<usize> = party
         .members
         .iter()
@@ -1085,7 +1096,7 @@ fn monster_hit_party(def: &MonsterDef, party: &mut Party, rng: &mut GameRng, log
         .map(|(i, _)| i)
         .collect();
     if alive.is_empty() {
-        return;
+        return false;
     }
     let victim = alive[rng.below(alive.len())];
     let target = &mut party.members[victim];
@@ -1094,7 +1105,7 @@ fn monster_hit_party(def: &MonsterDef, party: &mut Party, rng: &mut GameRng, log
     let vname = target.character.first_name.clone();
     if !rng.chance(hit) {
         log.push(format!("{}の こうげき! {vname}は かわした", def.name));
-        return;
+        return false;
     }
     let mut dmg = combat::final_damage(0, def.attack, target.character.stats.defense, 0, 1);
     if target.state.guarding {
@@ -1108,6 +1119,7 @@ fn monster_hit_party(def: &MonsterDef, party: &mut Party, rng: &mut GameRng, log
         target.state.down = true;
         log.push(format!("{vname}は 気絶した!"));
     }
+    true
 }
 
 /// Adjacent monsters attack the party on their `attack_freq` cadence.
@@ -1120,6 +1132,7 @@ pub fn monster_attacks(
     mut rng: ResMut<GameRng>,
     mut party: ResMut<Party>,
     mut log: ResMut<MessageLog>,
+    mut se: EventWriter<crate::audio::PlaySe>,
     mut monsters: Query<&mut Monster>,
 ) {
     if ticks.read().count() == 0 {
@@ -1145,7 +1158,9 @@ pub fn monster_attacks(
         m.next_attack = cycle + def.attack_freq as u64;
         m.anim = AnimKind::Attack;
         m.anim_hold = 0.4;
-        monster_hit_party(&def, &mut party, &mut rng, &mut log);
+        if monster_hit_party(&def, &mut party, &mut rng, &mut log) {
+            se.send(crate::audio::PlaySe(crate::audio::Se::AttackHit));
+        }
     }
 }
 

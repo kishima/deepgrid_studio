@@ -163,6 +163,16 @@ impl EventFlags {
             *b = on;
         }
     }
+    /// The raw flag vector (plan10 save target).
+    pub fn to_vec(&self) -> Vec<bool> {
+        self.bits.clone()
+    }
+    /// Restore from a save, keeping the configured flag count.
+    pub fn restore(&mut self, saved: &[bool]) {
+        for (i, b) in saved.iter().enumerate() {
+            self.set(i, *b);
+        }
+    }
 }
 
 /// Evaluate an event's flag condition. Empty conditions always hold.
@@ -178,7 +188,7 @@ pub fn flags_satisfied(flags: &EventFlags, conds: &[FlagCond], join: FlagJoin) -
 
 /// A scheduled event run: execute `event_id`'s actions once `fire_cycle` is
 /// reached, if the player is still on `level`.
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct QueuedEvent {
     pub event_id: String,
     pub level: usize,
@@ -193,7 +203,8 @@ pub struct EventQueue {
 
 /// Per-level trigger state: which one-shot triggers have fired, and toggle
 /// switch positions. Snapshotted into `LevelState` on transition.
-#[derive(Resource, Default, Clone)]
+#[derive(Resource, Serialize, Deserialize, Default, Clone, Debug)]
+#[serde(default)]
 pub struct TriggerStates {
     /// Event ids that have fired and must not fire again (OneWay / Keyhole).
     pub fired: std::collections::HashSet<String>,
@@ -300,6 +311,7 @@ pub fn front_interact(
     clock: Res<GameClock>,
     writes: Res<WallWrites>,
     mut log: ResMut<MessageLog>,
+    mut se: EventWriter<crate::audio::PlaySe>,
 ) {
     let level = current.0;
     let Some(ld) = game_levels.levels.get(level) else { return };
@@ -331,6 +343,7 @@ pub fn front_interact(
                     } else if enqueue(&mut queue, ev, level, clock.cycle, &flags) {
                         triggers.fired.insert(ev.id.clone());
                         log.push("かぎを つかった。");
+                        se.send(crate::audio::PlaySe(crate::audio::Se::Switch));
                     }
                 }
                 TriggerKind::SwitchOneWay => {
@@ -339,6 +352,7 @@ pub fn front_interact(
                     {
                         triggers.fired.insert(ev.id.clone());
                         log.push("スイッチを おした。");
+                        se.send(crate::audio::PlaySe(crate::audio::Se::Switch));
                     }
                 }
                 TriggerKind::SwitchToggle => {
@@ -346,12 +360,14 @@ pub fn front_interact(
                     triggers.toggled_on.insert(ev.id.clone(), on);
                     if enqueue(&mut queue, ev, level, clock.cycle, &flags) {
                         log.push(if on { "スイッチ ON" } else { "スイッチ OFF" });
+                        se.send(crate::audio::PlaySe(crate::audio::Se::Switch));
                     }
                 }
                 TriggerKind::SwitchPush => {
                     let fired = enqueue(&mut queue, ev, level, clock.cycle, &flags);
                     if fired {
                         log.push("スイッチを おした。");
+                        se.send(crate::audio::PlaySe(crate::audio::Se::Switch));
                     }
                 }
                 _ => {}
@@ -380,6 +396,7 @@ pub fn entry_triggers(
     floor_items: Query<&FloorItem>,
     mut transition: EventWriter<LevelTransition>,
     mut log: ResMut<MessageLog>,
+    mut se: EventWriter<crate::audio::PlaySe>,
 ) {
     let pos = player.pos;
     let entered = *last != Some(pos);
@@ -406,8 +423,11 @@ pub fn entry_triggers(
     for ev in &ld.events {
         match &ev.trigger {
             TriggerKind::WarpPoint { .. } => {
-                if entered && ev.at == (pos.x, pos.y, pos.floor) {
-                    enqueue(&mut queue, ev, level, clock.cycle, &flags);
+                if entered
+                    && ev.at == (pos.x, pos.y, pos.floor)
+                    && enqueue(&mut queue, ev, level, clock.cycle, &flags)
+                {
+                    se.send(crate::audio::PlaySe(crate::audio::Se::Warp));
                 }
             }
             TriggerKind::FloorPlate { cond } => {
@@ -421,8 +441,8 @@ pub fn entry_triggers(
                     }),
                 };
                 let was = triggers.plate_armed.get(&ev.id).copied().unwrap_or(false);
-                if satisfied && !was {
-                    enqueue(&mut queue, ev, level, clock.cycle, &flags);
+                if satisfied && !was && enqueue(&mut queue, ev, level, clock.cycle, &flags) {
+                    se.send(crate::audio::PlaySe(crate::audio::Se::Switch));
                 }
                 triggers.plate_armed.insert(ev.id.clone(), satisfied);
             }
@@ -490,6 +510,9 @@ pub struct EventWorld<'w> {
     pub move_mode: ResMut<'w, MoveMode>,
     pub flags: ResMut<'w, EventFlags>,
     pub triggers: ResMut<'w, TriggerStates>,
+    pub bgm: ResMut<'w, crate::audio::BgmState>,
+    pub demo: EventWriter<'w, crate::demo::StartDemoReq>,
+    pub se: EventWriter<'w, crate::audio::PlaySe>,
 }
 
 #[derive(SystemParam)]
@@ -553,9 +576,16 @@ pub fn run_events(
                     }
                     log.push("パーティは 復活した!");
                 }
-                EventAction::ChangeBgm { bgm } => log.push(format!("♪ BGMが かわった: {bgm} (未実装)")),
-                EventAction::StartDemo { demo } => log.push(format!("デモ「{demo}」を さいせい (未実装)")),
+                // BGM override: lasts until the next level move / next ChangeBgm
+                // ("" clears back to the level's own track). plan10.
+                EventAction::ChangeBgm { bgm } => {
+                    world.bgm.override_track = if bgm.is_empty() { None } else { Some(bgm.clone()) };
+                }
+                EventAction::StartDemo { demo } => {
+                    world.demo.send(crate::demo::StartDemoReq(demo.clone()));
+                }
                 EventAction::Warp { level: tl, x, y, floor, facing } => {
+                    world.se.send(crate::audio::PlaySe(crate::audio::Se::Warp));
                     if *tl == level {
                         player.pos = GridPos::new(*x, *y, *floor);
                         player.facing = *facing;

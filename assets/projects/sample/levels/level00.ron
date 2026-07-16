@@ -40,10 +40,10 @@
             "########################################",
             "########################################",
             "#########################.....T....#####",
-            "#########################..........#####",
+            "#########################.........S#####",
             "#########################.........W#####",
-            "#########################u.........#####",
-            "#########################..........#####",
+            "#########################u........S#####",
+            "#########################.........S#####",
             "#########################..........#####",
             "#########################..........#####",
             "########################################",
@@ -64,10 +64,10 @@
         // ---- floor 1 (middle): start hall + showcase stairs ----
         (rows: [
             "########################################",
-            "####.###################################",
+            "####S###################################",
             "####2###################################",
-            "####.......#############################",
-            "##.1.......H...#########################",
+            "####S......#############################",
+            "##S1.......H...#########################",
             "####.......#...#########################",
             "####..>................#################",
             "####H..~~..............#################",
@@ -208,5 +208,22 @@
          actions: [SetBlock(x: 33, y: 20, floor: 0, block: Wall)]),
         (id: "at_setliquid", trigger: SwitchPush, at: (33, 22, 0),
          actions: [SetLiquid(x: 33, y: 22, floor: 0, kind: Some(Water))]),
+        // plan10: BGM override + demos (autotest fixtures; press Space facing the cell).
+        (id: "at_bgm", trigger: SwitchPush, at: (34, 20, 0),
+         actions: [ChangeBgm(bgm: "bgm_battle.ogg")]),
+        (id: "at_demo_mid", trigger: SwitchPush, at: (34, 23, 0),
+         actions: [StartDemo(demo: "mid")]),
+        (id: "at_demo_op", trigger: SwitchPush, at: (34, 22, 0),
+         actions: [StartDemo(demo: "op")]),
+        // plan10: player-reachable switches in the start alcoves (all with
+        // footing below): north of start = OP demo, behind the north door =
+        // mid demo, behind the west door = BGM change.
+        (id: "hall_bgm", trigger: SwitchPush, at: (2, 4, 1),
+         actions: [ChangeBgm(bgm: "bgm_battle.ogg")]),
+        (id: "hall_demo_op", trigger: SwitchPush, at: (4, 3, 1),
+         actions: [StartDemo(demo: "op")]),
+        (id: "hall_demo_mid", trigger: SwitchPush, at: (4, 1, 1),
+         actions: [StartDemo(demo: "mid")]),
     ],
+    bgm: "bgm_dungeon1.ogg",
 )

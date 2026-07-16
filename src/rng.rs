@@ -22,6 +22,17 @@ impl Default for GameRng {
 }
 
 impl GameRng {
+    /// The raw generator state (plan10 save target). Saving and restoring it
+    /// makes "load → same inputs → same outcomes" hold exactly.
+    pub fn state(&self) -> u64 {
+        self.state
+    }
+
+    pub fn set_state(&mut self, state: u64) {
+        // Guard against a zero state (xorshift's absorbing point).
+        self.state = if state == 0 { SEED } else { state };
+    }
+
     fn next_u64(&mut self) -> u64 {
         // xorshift64*
         let mut x = self.state;

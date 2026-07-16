@@ -47,4 +47,5 @@
         (id: "l1_warp", trigger: WarpPoint(hidden: false), at: (9, 9, 0),
          actions: [Warp(level: 0, x: 1, y: 10, floor: 0, facing: South)]),
     ],
+    bgm: "bgm_dungeon2.ogg",
 )

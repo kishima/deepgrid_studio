@@ -239,7 +239,7 @@ pub struct Character {
 /// A stat change currently in force from an *eaten* item. Equipment effects are
 /// derived from worn items instead (see [`Inventory::equipment_effects`]) so
 /// unequipping restores stats automatically without touching base values.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ActiveEffect {
     pub stat: StatKind,
     pub delta: i32,
@@ -253,7 +253,8 @@ pub struct ActiveEffect {
 
 /// Mutable per-play state, split from the immutable `Character` definition. This
 /// is the save target (plan10). No longer `Copy` — it owns the active-effect list.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(default)]
 pub struct CharacterState {
     pub hp: i32,
     pub mp: i32,
@@ -299,6 +300,7 @@ impl CharacterState {
 }
 
 /// One party slot: the character definition, its live state, and its inventory.
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct PartyMember {
     pub character: Character,
     pub state: CharacterState,

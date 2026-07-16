@@ -79,6 +79,7 @@ pub fn build_editor_ui(ctx: &mut egui::Context, state: &mut EditorState) {
         Tab::Monsters => monsters_tab(ctx, state),
         Tab::Magics => magics_tab(ctx, state),
         Tab::Events => events_tab(ctx, state),
+        Tab::Demos => demos_tab(ctx, state),
         Tab::Settings => settings_tab(ctx, state),
     }
 }
@@ -292,6 +293,27 @@ fn map_view(ctx: &egui::Context, state: &mut EditorState) {
                 }
             });
             state.select_floor(floor);
+            // Level BGM (plan10): a file under assets/audio/bgm, "" = silence.
+            ui.separator();
+            ui.label("BGM");
+            let bgm_files = bgm_file_list(state);
+            let mut bgm = state.cur().bgm.clone();
+            let shown = if bgm.is_empty() { "(なし)".to_string() } else { bgm.clone() };
+            let mut bgm_changed = false;
+            egui::ComboBox::from_id_salt("level_bgm").selected_text(shown).show_ui(ui, |ui| {
+                if ui.selectable_value(&mut bgm, String::new(), "(なし)").changed() {
+                    bgm_changed = true;
+                }
+                for f in &bgm_files {
+                    if ui.selectable_value(&mut bgm, f.clone(), f).changed() {
+                        bgm_changed = true;
+                    }
+                }
+            });
+            if bgm_changed {
+                state.snapshot();
+                state.cur_mut().bgm = bgm;
+            }
             ui.separator();
             if ui.button("＋レベル").clicked() {
                 state.add_level();
@@ -865,6 +887,8 @@ fn events_tab(ctx: &egui::Context, state: &mut EditorState) {
     egui::CentralPanel::default().show(ctx, |ui| {
         let item_ids = ids_of(&state.proj.items, |d| d.id.clone());
         let mon_ids = ids_of(&state.proj.monsters, |d| d.id.clone());
+        let demo_ids = ids_of(&state.proj.demos, |d| d.id.clone());
+        let bgm_files = bgm_file_list(state);
         egui::ScrollArea::vertical().show(ui, |ui| {
             wall_texts_editor(ui, state);
             stairs_editor(ui, state);
@@ -906,7 +930,7 @@ fn events_tab(ctx: &egui::Context, state: &mut EditorState) {
             }
             ui.separator();
             ui.label("アクション列");
-            dirty |= actions_editor(ui, &mut ev.actions, &item_ids, &mon_ids);
+            dirty |= actions_editor(ui, &mut ev.actions, &item_ids, &mon_ids, &bgm_files, &demo_ids);
             if dirty {
                 state.touch();
             }
@@ -998,7 +1022,14 @@ fn trigger_editor(ui: &mut egui::Ui, trigger: &mut TriggerKind, item_ids: &[Stri
     dirty
 }
 
-fn actions_editor(ui: &mut egui::Ui, actions: &mut Vec<EventAction>, item_ids: &[String], mon_ids: &[String]) -> bool {
+fn actions_editor(
+    ui: &mut egui::Ui,
+    actions: &mut Vec<EventAction>,
+    item_ids: &[String],
+    mon_ids: &[String],
+    bgm_files: &[String],
+    demo_ids: &[String],
+) -> bool {
     let mut dirty = false;
     let mut remove = None;
     let mut move_up = None;
@@ -1048,6 +1079,14 @@ fn actions_editor(ui: &mut egui::Ui, actions: &mut Vec<EventAction>, item_ids: &
                     for m in [MoveMode::Normal, MoveMode::Free, MoveMode::Locked] {
                         if ui.selectable_value(mode, m, move_mode_label(m)).changed() { dirty = true; }
                     }
+                }
+                // plan10: pick from the shipped BGM files / authored demo ids
+                // ("―" on ChangeBgm = back to the level's own track).
+                EventAction::ChangeBgm { bgm } => {
+                    if id_combo(ui, format!("abgm_{i}").as_str(), bgm, bgm_files) { dirty = true; }
+                }
+                EventAction::StartDemo { demo } => {
+                    if id_combo(ui, format!("ademo_{i}").as_str(), demo, demo_ids) { dirty = true; }
                 }
                 _ => {}
             }
@@ -1114,12 +1153,158 @@ fn settings_tab(ctx: &egui::Context, state: &mut EditorState) {
                     }
                 }
             });
+            ui.separator();
+            ui.heading("グラフィック差し替え (override/)");
+            ui.small("組み込み素材と同じ相対パスのファイルを <プロジェクト>/override/ に置くと優先される (対象: 地形テクスチャ一式)");
+            if ui.button("再スキャン").clicked() {
+                state.override_files = None;
+            }
+            for f in override_file_list(state) {
+                ui.monospace(f);
+            }
+            if state.override_files.as_ref().is_some_and(|v| v.is_empty()) {
+                ui.label("(差し替えなし)");
+            }
             if dirty {
                 state.touch();
                 state.recompute_warnings();
             }
         });
     });
+}
+
+/// Demos tab (plan10): the shared list-left / detail-right layout.
+fn demos_tab(ctx: &egui::Context, state: &mut EditorState) {
+    let labels = ids_of(&state.proj.demos, |d| format!("{} {}", d.id, d.name));
+    let max_demos = state.proj.limits.max_demos;
+    let mut sel = state.sel_demo;
+    egui::SidePanel::left("demo_list").default_width(180.0).show(ctx, |ui| {
+        match list_panel(ui, "デモ一覧", &labels, &mut sel) {
+            ListAction::Add => {
+                if state.proj.demos.len() >= max_demos {
+                    state.status = format!("デモは最大{max_demos}本 (max_demos)");
+                } else {
+                    state.snapshot();
+                    let ids = ids_of(&state.proj.demos, |d| d.id.clone());
+                    state.proj.demos.push(crate::demo::DemoDef {
+                        id: super::ops::next_id(&ids, "demo"),
+                        name: String::new(),
+                        lines: vec!["".to_string()],
+                        bgm: String::new(),
+                        bg_color: (0.0, 0.0, 0.0),
+                    });
+                    sel = state.proj.demos.len() - 1;
+                }
+            }
+            ListAction::Duplicate => {
+                if state.proj.demos.len() >= max_demos {
+                    state.status = format!("デモは最大{max_demos}本 (max_demos)");
+                } else {
+                    state.snapshot();
+                    let mut d = state.proj.demos[sel].clone();
+                    let ids = ids_of(&state.proj.demos, |d| d.id.clone());
+                    d.id = super::ops::next_id(&ids, "demo");
+                    state.proj.demos.push(d);
+                    sel = state.proj.demos.len() - 1;
+                }
+            }
+            ListAction::Delete => {
+                state.snapshot();
+                state.proj.demos.remove(sel);
+                sel = sel.min(state.proj.demos.len().saturating_sub(1));
+            }
+            ListAction::None => {}
+        }
+    });
+    state.sel_demo = sel;
+
+    egui::CentralPanel::default().show(ctx, |ui| {
+        if state.proj.demos.get(state.sel_demo).is_none() {
+            ui.label("デモを選択");
+            return;
+        }
+        let bgm_files = bgm_file_list(state);
+        let line_limit = state.proj.limits.demo_message_lines;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            let d = &mut state.proj.demos[state.sel_demo];
+            let mut dirty = false;
+            dirty |= text_row(ui, "id", &mut d.id);
+            dirty |= text_row(ui, "名前", &mut d.name);
+            ui.horizontal(|ui| {
+                ui.label("BGM");
+                if id_combo(ui, "demo_bgm", &mut d.bgm, &bgm_files) {
+                    dirty = true;
+                }
+                ui.label("背景色 RGB");
+                for c in [&mut d.bg_color.0, &mut d.bg_color.1, &mut d.bg_color.2] {
+                    if ui.add(egui::DragValue::new(c).speed(0.02).range(0.0..=1.0)).changed() {
+                        dirty = true;
+                    }
+                }
+            });
+            let count = d.lines.len();
+            if count > line_limit {
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 120, 60),
+                    format!("行数 {count} が上限 {line_limit} を超えている"),
+                );
+            } else {
+                ui.label(format!("本文 {count}/{line_limit} 行 (1行ずつ表示される)"));
+            }
+            let mut joined = d.lines.join("\n");
+            if ui
+                .add(egui::TextEdit::multiline(&mut joined).desired_rows(20).desired_width(f32::INFINITY))
+                .changed()
+            {
+                d.lines = joined.split('\n').map(str::to_string).collect();
+                dirty = true;
+            }
+            if dirty {
+                state.touch();
+                state.recompute_warnings();
+            }
+        });
+    });
+}
+
+/// Lazily scan `assets/audio/bgm/` for selectable BGM files.
+fn bgm_file_list(state: &mut EditorState) -> Vec<String> {
+    if state.bgm_files.is_none() {
+        let mut v: Vec<String> = std::fs::read_dir("assets/audio/bgm")
+            .map(|rd| {
+                rd.flatten()
+                    .filter(|e| e.path().extension().is_some_and(|x| x == "ogg"))
+                    .filter_map(|e| e.file_name().to_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+        v.sort();
+        state.bgm_files = Some(v);
+    }
+    state.bgm_files.clone().unwrap_or_default()
+}
+
+/// Lazily scan `<project>/override/` for the settings-tab swap list.
+fn override_file_list(state: &mut EditorState) -> Vec<String> {
+    if state.override_files.is_none() {
+        fn walk(dir: &std::path::Path, root: &std::path::Path, out: &mut Vec<String>) {
+            let Ok(rd) = std::fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, root, out);
+                } else if let Ok(rel) = p.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+        let root = state.proj.dir.join("override");
+        let mut v = Vec::new();
+        walk(&root, &root, &mut v);
+        v.sort();
+        state.override_files = Some(v);
+    }
+    state.override_files.clone().unwrap_or_default()
 }
 
 // ------------------------------------------------------------------ small widgets

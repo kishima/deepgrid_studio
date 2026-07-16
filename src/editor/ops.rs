@@ -218,6 +218,29 @@ pub fn validate(project: &Project) -> Vec<String> {
             w.push(format!("level{li}: {tm}"));
         }
     }
+
+    // Demos (plan10): count/line limits, duplicate ids, dangling StartDemo refs.
+    over(&mut w, project.demos.len(), l.max_demos, "デモ本数");
+    let demo_ids: Vec<String> = project.demos.iter().map(|d| d.id.clone()).collect();
+    for (i, d) in project.demos.iter().enumerate() {
+        if d.id.is_empty() {
+            w.push(format!("demo[{i}]: idが空"));
+        } else if demo_ids.iter().filter(|x| **x == d.id).count() > 1 {
+            w.push(format!("demo id重複 '{}'", d.id));
+        }
+        over(&mut w, d.lines.len(), l.demo_message_lines, &format!("デモ'{}' 行数", d.id));
+    }
+    for (li, lvl) in project.levels.iter().enumerate() {
+        for ev in &lvl.events {
+            for a in &ev.actions {
+                if let crate::event::EventAction::StartDemo { demo } = a
+                    && !has(&demo_ids, demo)
+                {
+                    w.push(format!("level{li} {}: 未定義デモ '{demo}'", ev.id));
+                }
+            }
+        }
+    }
     w
 }
 

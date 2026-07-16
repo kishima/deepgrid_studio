@@ -263,7 +263,8 @@ pub enum SlotRef {
 /// A character's carried items: two hands, six equipment slots, and the
 /// pouch/backpack (sized from `LimitsConfig`). Nested containers are out of
 /// scope for plan5.
-#[derive(Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(default)]
 pub struct Inventory {
     hands: [Option<ItemInstance>; 2],
     equipment: [Option<ItemInstance>; 6],

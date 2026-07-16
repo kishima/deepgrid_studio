@@ -61,6 +61,8 @@ pub struct AutoTest {
     // Combat-step scratch (steps 13+).
     monster_ent: Option<Entity>,
     attempts: u32,
+    // plan10 save-load determinism scratch.
+    rng_seq: Vec<usize>,
 }
 
 impl AutoTest {
@@ -1513,12 +1515,22 @@ use crate::world::CurrentLevel;
 
 /// Read-only world refs for the gimmick steps, bundled to fit the parameter limit.
 #[derive(bevy::ecs::system::SystemParam)]
-pub struct GimmickRefs<'w> {
-    pub flags: Res<'w, EventFlags>,
+pub struct GimmickRefs<'w, 's> {
+    pub flags: ResMut<'w, EventFlags>,
     pub triggers: Res<'w, TriggerStates>,
     pub current: Res<'w, CurrentLevel>,
     pub dungeon: Res<'w, Dungeon>,
     pub doors: Res<'w, DoorStates>,
+    // plan10 additions (steps 44–47).
+    pub bgm: ResMut<'w, crate::audio::BgmState>,
+    pub demo: ResMut<'w, crate::demo::DemoState>,
+    pub rng: ResMut<'w, crate::rng::GameRng>,
+    pub settings: ResMut<'w, crate::settings::UserSettings>,
+    pub save_req: EventWriter<'w, crate::save::SaveRequest>,
+    pub load_req: EventWriter<'w, crate::save::LoadRequest>,
+    pub queue: ResMut<'w, EventQueue>,
+    pub bgm_channels: Query<'w, 's, &'static crate::audio::BgmChannel>,
+    pub demo_overlays: Query<'w, 's, Entity, With<crate::demo::DemoOverlay>>,
 }
 
 /// Steps 34–42 (plan8): floor plates, flag AND/OR, delay/Loop/EndChain, keyhole,
@@ -1535,8 +1547,7 @@ pub fn run_gimmick(
     clock: Res<GameClock>,
     log: Res<MessageLog>,
     item_catalog: Res<ItemCatalog>,
-    mut queue: ResMut<EventQueue>,
-    refs: GimmickRefs,
+    mut refs: GimmickRefs,
     mut script: ResMut<ScriptedInput>,
     mut interact: EventWriter<FrontInteract>,
     mut wall_write: EventWriter<crate::event::WallWriteRequest>,
@@ -1673,7 +1684,7 @@ pub fn run_gimmick(
                 let ends = item_count(31, 22, 0, "bread");
                 if refs.flags.get(20) && loops >= 2 && ends == 1 {
                     // Stop the infinite loop before moving on.
-                    queue.pending.retain(|q| q.event_id != "at_loop");
+                    refs.queue.pending.retain(|q| q.event_id != "at_loop");
                     t.next_step("delay-loop: delay elapses, Loop repeats, EndChain stops at 1");
                 } else if clock.cycle >= t.mark_cycle + 30 {
                     fail(&t, "delay-loop", format!("flag20={} loops={loops} ends={ends}", refs.flags.get(20)), &mut exit);
@@ -1946,11 +1957,172 @@ pub fn run_gimmick(
             }
             _ => {
                 if log.contains("テストのかきこみ") {
-                    println!("[autotest] PASS wall-write: pencil writes, 見る reads it back");
-                    println!("[autotest] ALL PASS (43 steps)");
-                    exit.send(AppExit::Success);
+                    t.next_step("wall-write: pencil writes, 見る reads it back");
                 } else if clock.cycle >= t.mark_cycle + 10 {
                     fail(&t, "wall-write", "書いた本文が読めない".into(), &mut exit);
+                }
+            }
+        },
+
+        // ---- 44 (plan10): ChangeBgm overrides the level track -----------------
+        44 => match t.phase {
+            0 => {
+                if refs.bgm.level_track != "bgm_dungeon1.ogg" {
+                    fail(&t, "bgm-change", format!("レベルBGMが違う: {:?}", refs.bgm.level_track), &mut exit);
+                    return;
+                }
+                interact.send(FrontInteract { pos: GridPos::new(34, 20, 0) });
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            _ => {
+                let want = Some("bgm_battle.ogg".to_string());
+                let channel_up = refs.bgm_channels.iter().any(|c| c.track == "bgm_battle.ogg" && c.active);
+                if refs.bgm.override_track == want && channel_up {
+                    t.next_step("bgm-change: override set, channel crossfading in");
+                } else if clock.cycle >= t.mark_cycle + 10 {
+                    fail(
+                        &t,
+                        "bgm-change",
+                        format!("override {:?} / channel {channel_up}", refs.bgm.override_track),
+                        &mut exit,
+                    );
+                }
+            }
+        },
+
+        // ---- 45 (plan10): StartDemo shows the overlay and freezes the clock ---
+        45 => match t.phase {
+            0 => {
+                interact.send(FrontInteract { pos: GridPos::new(34, 23, 0) });
+                t.mark_cycle = clock.cycle;
+                t.frames = 0;
+                t.phase = 1;
+            }
+            1 => {
+                if refs.demo.playing() && !refs.demo_overlays.is_empty() {
+                    t.mark_cycle = clock.cycle;
+                    t.frames = 0;
+                    t.phase = 2;
+                } else if clock.cycle >= t.mark_cycle + 10 {
+                    fail(&t, "demo-start-skip", "デモが始まらない".into(), &mut exit);
+                }
+            }
+            2 => {
+                // 20 frames with the demo up: the cycle clock must not advance.
+                t.frames += 1;
+                if t.frames >= 20 {
+                    if clock.cycle != t.mark_cycle {
+                        fail(&t, "demo-start-skip", "デモ中にサイクルが進んだ".into(), &mut exit);
+                        return;
+                    }
+                    // Close it the way Escape+input would (restore BGM, drop overlay).
+                    let prev = refs.demo.active.as_ref().and_then(|a| a.prev_override.clone());
+                    refs.bgm.override_track = prev;
+                    refs.demo.active = None;
+                    for e in &refs.demo_overlays {
+                        commands.entity(e).despawn_recursive();
+                    }
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 3;
+                }
+            }
+            _ => {
+                if clock.cycle > t.mark_cycle {
+                    t.next_step("demo-start-skip: overlay up, clock frozen, resumes on close");
+                }
+            }
+        },
+
+        // ---- 46 (plan10): save → mutate → load restores exactly ---------------
+        46 => match t.phase {
+            0 => {
+                data.open = false;
+                // No monsters: their AI would draw from the RNG on its own
+                // schedule and break the exact-replay comparison.
+                for (e, _) in &monsters {
+                    commands.entity(e).despawn_recursive();
+                }
+                player.pos = GridPos::new(26, 19, 0);
+                player.facing = Facing::North;
+                refs.flags.set(25, true);
+                refs.save_req.send(crate::save::SaveRequest(1));
+                t.mark_cycle = clock.cycle;
+                t.phase = 1;
+            }
+            1 => {
+                // Give the save a frame, then record the post-save RNG draws and
+                // wreck everything the load must restore.
+                if clock.cycle > t.mark_cycle {
+                    t.saved_pos = Some(player.pos);
+                    t.hp_before = party.members.iter().map(|m| m.state.hp).collect();
+                    t.rng_seq = (0..5).map(|_| refs.rng.below(1000)).collect();
+                    player.pos = GridPos::new(27, 19, 0);
+                    refs.flags.set(25, false);
+                    for m in &mut party.members {
+                        m.state.hp = (m.state.hp - 3).max(1);
+                    }
+                    refs.load_req.send(crate::save::LoadRequest(1));
+                    t.mark_cycle = clock.cycle;
+                    t.phase = 2;
+                }
+            }
+            _ => {
+                if Some(player.pos) == t.saved_pos && refs.flags.get(25) {
+                    let hp_now: Vec<i32> = party.members.iter().map(|m| m.state.hp).collect();
+                    if hp_now != t.hp_before {
+                        fail(&t, "save-load", format!("HP不一致 {hp_now:?} vs {:?}", t.hp_before), &mut exit);
+                        return;
+                    }
+                    let replay: Vec<usize> = (0..5).map(|_| refs.rng.below(1000)).collect();
+                    if replay != t.rng_seq {
+                        fail(&t, "save-load", "乱数列が一致しない".into(), &mut exit);
+                        return;
+                    }
+                    t.rng_seq.clear();
+                    t.next_step("save-load: position/HP/flags/RNG restored exactly");
+                } else if clock.cycle >= t.mark_cycle + 20 {
+                    fail(
+                        &t,
+                        "save-load",
+                        format!("復元されない pos {:?} flag25 {}", player.pos, refs.flags.get(25)),
+                        &mut exit,
+                    );
+                }
+            }
+        },
+
+        // ---- 47 (plan10): user_settings.speed scales the cycle clock ----------
+        47 => match t.phase {
+            0 => {
+                refs.settings.speed = 2.0;
+                t.mark_cycle = clock.cycle;
+                t.frames = 0;
+                t.phase = 1;
+            }
+            1 => {
+                t.frames += 1;
+                if t.frames >= 30 {
+                    t.baseline = (clock.cycle - t.mark_cycle) as i32; // cycles at 2.0×
+                    refs.settings.speed = 0.5;
+                    t.mark_cycle = clock.cycle;
+                    t.frames = 0;
+                    t.phase = 2;
+                }
+            }
+            _ => {
+                t.frames += 1;
+                if t.frames >= 30 {
+                    let slow = (clock.cycle - t.mark_cycle) as i32; // cycles at 0.5×
+                    refs.settings.speed = 1.0;
+                    // 2.0× vs 0.5× is a 4× ratio; assert a comfortable margin.
+                    if t.baseline >= slow * 2 {
+                        println!("[autotest] PASS speed: 2.0x ticks {}, 0.5x ticks {slow}", t.baseline);
+                        println!("[autotest] ALL PASS (47 steps)");
+                        exit.send(AppExit::Success);
+                    } else {
+                        fail(&t, "speed", format!("速度倍率が効かない (2x:{} 0.5x:{slow})", t.baseline), &mut exit);
+                    }
                 }
             }
         },

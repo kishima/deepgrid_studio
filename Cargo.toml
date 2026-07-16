@@ -7,8 +7,11 @@ license = "GPL-3.0"
 
 [dependencies]
 # Match the versions proven to build/run in docker/ (shared with mycity-simulator).
-# plan1 needs no audio: audio-related features are intentionally omitted.
 bevy = { version = "0.15", default-features = false, features = [
+    # plan10: BGM + sound effects (ogg). Bevy warns and keeps running when no
+    # audio device exists (docker/CI) — required behaviour, checked by autotest.
+    "bevy_audio",
+    "vorbis",
     "bevy_asset",
     "bevy_core_pipeline",
     "bevy_image",

@@ -73,6 +73,9 @@ pub struct Palette {
     switch_mat: Handle<StandardMaterial>,
     door_fill_mats: [Handle<StandardMaterial>; 2],
     door_lintel_mats: [Handle<StandardMaterial>; 2],
+    /// Ceiling texture (resolved against the project override dir, plan10);
+    /// the ceiling material itself is per-level (uv scale = map size).
+    ceiling_tex: Handle<Image>,
 }
 
 /// Build the static dungeon geometry across all floors (plan2 Step 2; per-cell
@@ -82,11 +85,12 @@ pub fn setup_dungeon(
     mut commands: Commands,
     dungeon: Res<Dungeon>,
     asset_server: Res<AssetServer>,
+    resolver: Res<crate::project::AssetResolver>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let palette = build_palette(&asset_server, &mut meshes, &mut materials);
-    spawn_level_mesh(&mut commands, &palette, &asset_server, &mut meshes, &mut materials, &dungeon.level);
+    let palette = build_palette(&asset_server, &resolver, &mut meshes, &mut materials);
+    spawn_level_mesh(&mut commands, &palette, &mut meshes, &mut materials, &dungeon.level);
     commands.insert_resource(palette);
 
     // High ambient base so the whole scene stays readable and the player light
@@ -102,7 +106,6 @@ pub fn setup_dungeon(
 pub fn spawn_level_mesh(
     commands: &mut Commands,
     palette: &Palette,
-    asset_server: &AssetServer,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     level: &Level,
@@ -117,13 +120,13 @@ pub fn spawn_level_mesh(
             }
         }
     }
-    spawn_ceiling(commands, asset_server, meshes, materials, w, h, level.floor_count());
+    spawn_ceiling(commands, palette, meshes, materials, w, h, level.floor_count());
 }
 
 /// Spawn the single ceiling slab over the whole map at the top floor's head.
 fn spawn_ceiling(
     commands: &mut Commands,
-    asset_server: &AssetServer,
+    palette: &Palette,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     w: usize,
@@ -133,7 +136,7 @@ fn spawn_ceiling(
     let top = floor_count as f32 * BLOCK_SIZE;
     let slab = meshes.add(Cuboid::new(w as f32 * BLOCK_SIZE, 0.02, h as f32 * BLOCK_SIZE));
     let ceiling_mat = materials.add(StandardMaterial {
-        base_color_texture: Some(load_repeating(asset_server, "textures/ceiling_rock058_color.png")),
+        base_color_texture: Some(palette.ceiling_tex.clone()),
         perceptual_roughness: 0.95,
         uv_transform: Affine2::from_scale(Vec2::new(w as f32, h as f32)),
         ..default()
@@ -316,9 +319,11 @@ fn spawn_decor(commands: &mut Commands, p: &Palette, block: Block, tile: TilePos
 }
 
 /// Build the shared tile palette (meshes + materials). Public so the 3D editor
-/// (plan9.5) can build its own scene without a play-mode `Dungeon`.
+/// (plan9.5) can build its own scene without a play-mode `Dungeon`. Terrain
+/// textures resolve through the project's `override/` directory (plan10).
 pub fn build_palette(
     asset_server: &AssetServer,
+    resolver: &crate::project::AssetResolver,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) -> Palette {
@@ -337,15 +342,16 @@ pub fn build_palette(
     let trigger_cube = meshes.add(Cuboid::new(0.7, 0.9, 0.7));
 
     let floor_mat = materials.add(StandardMaterial {
-        base_color_texture: Some(load_repeating(asset_server, "textures/floor_pavingstones119_color.png")),
+        base_color_texture: Some(load_repeating(asset_server, resolver.resolve("textures/floor_pavingstones119_color.png"))),
         perceptual_roughness: 0.95,
         ..default()
     });
     let wall_mat = materials.add(StandardMaterial {
-        base_color_texture: Some(load_repeating(asset_server, "textures/wall_bricks066_color.png")),
+        base_color_texture: Some(load_repeating(asset_server, resolver.resolve("textures/wall_bricks066_color.png"))),
         perceptual_roughness: 0.9,
         ..default()
     });
+    let ceiling_tex = load_repeating(asset_server, resolver.resolve("textures/ceiling_rock058_color.png"));
     let writable_mat = materials.add(StandardMaterial {
         base_color: Color::srgb(0.55, 0.50, 0.42),
         emissive: LinearRgba::rgb(0.10, 0.09, 0.05),
@@ -447,6 +453,7 @@ pub fn build_palette(
         switch_mat,
         door_fill_mats,
         door_lintel_mats,
+        ceiling_tex,
     }
 }
 
@@ -482,7 +489,7 @@ fn wall_cube_mesh() -> Mesh {
 }
 
 /// Load a texture with repeat wrapping so tiling works.
-fn load_repeating(asset_server: &AssetServer, path: &'static str) -> Handle<Image> {
+fn load_repeating(asset_server: &AssetServer, path: String) -> Handle<Image> {
     asset_server.load_with_settings(path, |settings: &mut ImageLoaderSettings| {
         settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
             address_mode_u: ImageAddressMode::Repeat,

@@ -12,6 +12,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     g++ \
     libasound2-dev \
+    # ALSA -> PulseAudio bridge so cpal (bevy_audio) reaches WSLg's PulseServer
+    # (plan10; without it the container reports "No audio device found")
+    libasound2-plugins \
     libudev-dev \
     # X11 windowing (bevy "x11" feature)
     libx11-6 \
@@ -32,6 +35,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     vulkan-tools \
     ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+
+# Route the ALSA default device to PulseAudio (WSLg's PulseServer, passed via
+# PULSE_SERVER at run time) so bevy_audio finds an output device (plan10).
+RUN printf 'pcm.!default { type pulse }\nctl.!default { type pulse }\n' > /etc/asound.conf
 
 # Source tree is bind-mounted at /app at run time; target/ lands back on the host.
 WORKDIR /app

@@ -111,9 +111,39 @@ pub struct MagicActBtn(MagicAct);
 /// An ally-target selector button in the magic view (a party slot).
 #[derive(Component)]
 pub struct MagicTargetBtn(usize);
+/// A save/load slot button (plan10): `load` picks the direction.
+#[derive(Component)]
+pub struct SaveSlotBtn {
+    slot: usize,
+    load: bool,
+}
 
 /// Rest cycle cost: heal 1 HP/MP every this many cycles while ZZZ-resting.
 const REST_CYCLES: u64 = 10;
+
+/// Save/load slot clicks (plan10): saving keeps the screen open (the log line
+/// confirms), loading closes it — the world is about to be rebuilt.
+pub fn save_slot_clicks(
+    buttons: Query<(&Interaction, &SaveSlotBtn), Changed<Interaction>>,
+    resolver: Res<crate::project::AssetResolver>,
+    mut screen: ResMut<DataScreen>,
+    mut save_req: EventWriter<crate::save::SaveRequest>,
+    mut load_req: EventWriter<crate::save::LoadRequest>,
+) {
+    for (i, b) in &buttons {
+        if *i != Interaction::Pressed {
+            continue;
+        }
+        if b.load {
+            if crate::save::slot_exists(&resolver.project_dir, b.slot) {
+                load_req.send(crate::save::LoadRequest(b.slot));
+                screen.open = false;
+            }
+        } else {
+            save_req.send(crate::save::SaveRequest(b.slot));
+        }
+    }
+}
 
 /// Register the data-screen resources.
 pub fn init(app: &mut App) {
@@ -180,6 +210,7 @@ pub fn toggle_data_screen(
     party: Res<Party>,
     magics: Res<MagicCatalog>,
     limits: Res<crate::config::LimitsConfig>,
+    resolver: Res<crate::project::AssetResolver>,
 ) {
     if !screen.is_changed() {
         return;
@@ -188,7 +219,7 @@ pub fn toggle_data_screen(
         (true, None) => {
             let regular: Handle<Font> = asset_server.load(FONT_REGULAR);
             let bold: Handle<Font> = asset_server.load(FONT_BOLD);
-            let e = build_screen(&mut commands, &regular, &bold, &party, &magics, &limits);
+            let e = build_screen(&mut commands, &regular, &bold, &party, &magics, &limits, &resolver);
             root.0 = Some(e);
         }
         (false, Some(e)) => {
@@ -221,6 +252,7 @@ fn build_screen(
     party: &Party,
     magics: &MagicCatalog,
     limits: &crate::config::LimitsConfig,
+    resolver: &crate::project::AssetResolver,
 ) -> Entity {
     // Deterministic magic order for the list.
     let mut magic_ids: Vec<String> = magics.iter().map(|d| d.id.clone()).collect();
@@ -280,6 +312,43 @@ fn build_screen(
                     ))
                     .with_children(|b| {
                         b.spawn(text(bold, 15.0, Color::WHITE, format!("P{}: {}", i + 1, m.character.first_name)));
+                    });
+                }
+            });
+
+            // Save/load slots (plan10). Mouse-only per plan (no new keybinds).
+            root.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(6.0),
+                align_items: AlignItems::Center,
+                ..default()
+            })
+            .with_children(|row| {
+                row.spawn(text(bold, 15.0, Color::srgb(0.75, 0.8, 0.9), "セーブ/ロード:"));
+                for slot in 1..=crate::save::SLOTS {
+                    let exists = crate::save::slot_exists(&resolver.project_dir, slot);
+                    row.spawn((
+                        Button,
+                        Node { padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)), ..default() },
+                        BackgroundColor(TAB_BG),
+                        SaveSlotBtn { slot, load: false },
+                    ))
+                    .with_children(|b| {
+                        b.spawn(text(regular, 14.0, Color::WHITE, format!("セーブ{slot}")));
+                    });
+                    row.spawn((
+                        Button,
+                        Node { padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)), ..default() },
+                        BackgroundColor(TAB_BG),
+                        SaveSlotBtn { slot, load: true },
+                    ))
+                    .with_children(|b| {
+                        let (color, label) = if exists {
+                            (Color::WHITE, format!("ロード{slot}"))
+                        } else {
+                            (Color::srgb(0.5, 0.5, 0.5), format!("ロード{slot}(空)"))
+                        };
+                        b.spawn(text(regular, 14.0, color, label));
                     });
                 }
             });

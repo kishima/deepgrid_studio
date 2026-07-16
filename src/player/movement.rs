@@ -118,6 +118,11 @@ pub struct MoveAnim {
     /// Floors dropped by the fall currently in flight; a `PlayerFell` fires with
     /// this when the animation finishes, then it resets to 0.
     pending_fall: u32,
+    /// Set on teleport / level transition (plan10): held movement keys are
+    /// ignored until released, so walking into stairs while holding W doesn't
+    /// carry one step forward on arrival — where the return stairs usually sit
+    /// — and bounce straight back. A fresh key press still works immediately.
+    require_release: bool,
 }
 
 impl MoveAnim {
@@ -136,12 +141,14 @@ impl MoveAnim {
     }
 
     /// Clear any in-flight animation (plan8: teleport / level transition snaps).
+    /// Held movement keys stop repeating until released (plan10 stairs fix).
     pub fn reset(&mut self) {
         self.segments.clear();
         self.elapsed = 0.0;
         self.buffered = None;
         self.input_locked = false;
         self.pending_fall = 0;
+        self.require_release = true;
     }
 }
 
@@ -410,12 +417,22 @@ fn start_climb(up: bool, free: bool, player: &mut Player, anim: &mut MoveAnim, d
 
 /// Toggle the door kind of the cell directly in front of the player, if any.
 /// Instant (no animation) — the original opens doors by kind, not individually.
-fn toggle_front_door(player: &Player, dungeon: &Dungeon, doors: &mut DoorStates) {
+/// Returns the door's new state (`Some(open)`) when one was toggled, so the
+/// caller can pick the open/close SE (plan10).
+fn toggle_front_door(player: &Player, dungeon: &Dungeon, doors: &mut DoorStates) -> Option<bool> {
     let (dx, dy) = player.facing.delta();
     let front = GridPos::new(player.pos.x + dx, player.pos.y + dy, player.pos.floor);
     if let Some(crate::dungeon::Block::Door { kind }) = dungeon.level.block_at(front) {
         doors.toggle(kind);
+        Some(doors.is_open(kind))
+    } else {
+        None
     }
+}
+
+/// The door SE for its new state (plan10).
+fn door_se(open: bool) -> crate::audio::Se {
+    if open { crate::audio::Se::DoorOpen } else { crate::audio::Se::DoorClose }
 }
 
 fn start_command(cmd: Command, free: bool, player: &mut Player, anim: &mut MoveAnim, dungeon: &Dungeon, doors: &mut DoorStates) {
@@ -423,7 +440,9 @@ fn start_command(cmd: Command, free: bool, player: &mut Player, anim: &mut MoveA
         Command::Move(action) => start_move(action, free, player, anim, dungeon, doors),
         Command::ClimbUp => start_climb(true, free, player, anim, dungeon, doors),
         Command::ClimbDown => start_climb(false, free, player, anim, dungeon, doors),
-        Command::ToggleDoor => toggle_front_door(player, dungeon, doors),
+        Command::ToggleDoor => {
+            toggle_front_door(player, dungeon, doors);
+        }
         // Handled instantly in `player_movement` before reaching here.
         Command::Get
         | Command::ToggleData
@@ -452,6 +471,10 @@ pub struct ActionEvents<'w> {
     move_mode: Res<'w, crate::event::MoveMode>,
     /// Rebindable movement keys (plan9).
     keybinds: Res<'w, crate::settings::Keybinds>,
+    /// Sound-effect requests (plan10: footsteps, door, landing).
+    se: EventWriter<'w, crate::audio::PlaySe>,
+    /// Demo playback (plan10): all play input is ignored while a demo runs.
+    demo: Res<'w, crate::demo::DemoState>,
 }
 
 /// Drive input, animation, and the camera transform each frame.
@@ -488,6 +511,12 @@ pub fn player_movement(
         return;
     };
 
+    // Demo playback (plan10): freeze all play input/animation; the demo module
+    // owns the screen until it closes.
+    if events.demo.playing() {
+        return;
+    }
+
     // 1. Advance the current animation segment.
     if let Some(seg) = anim.segments.front().copied() {
         anim.elapsed += time.delta_secs();
@@ -507,6 +536,7 @@ pub fn player_movement(
                         floors: anim.pending_fall,
                     });
                     anim.pending_fall = 0;
+                    events.se.send(crate::audio::PlaySe(crate::audio::Se::Land));
                 }
                 // Snap exactly to the canonical logical pose to erase drift.
                 *transform = canonical_transform(&player);
@@ -535,7 +565,9 @@ pub fn player_movement(
                 if occ.contains(front) {
                     events.combat.send(PlayerAction::Attack);
                 } else {
-                    toggle_front_door(&player, &dungeon, &mut doors);
+                    if let Some(open) = toggle_front_door(&player, &dungeon, &mut doors) {
+                        events.se.send(crate::audio::PlaySe(door_se(open)));
+                    }
                     events.interact.send(crate::event::FrontInteract { pos: front });
                 }
             }
@@ -567,6 +599,11 @@ pub fn player_movement(
             anim.buffered = Some(cmd);
         }
     } else {
+        // After a teleport/transition, held keys re-arm only once fully released
+        // (a fresh press below still moves — just_pressed implies pressed).
+        if anim.require_release && events.keybinds.command_for(|k| keys.pressed(k)).is_none() {
+            anim.require_release = false;
+        }
         let next = if script.active {
             script.queue.pop_front()
         } else if data.open {
@@ -577,8 +614,17 @@ pub fn player_movement(
                 .0
                 .take()
                 .or_else(|| anim.buffered.take())
-                .or_else(|| events.keybinds.command_for(|k| keys.pressed(k)))
+                .or_else(|| {
+                    let held_ok = !anim.require_release;
+                    events.keybinds.command_for(|k| {
+                        if held_ok { keys.pressed(k) } else { keys.just_pressed(k) }
+                    })
+                })
         };
+        if next.is_some() {
+            // Any deliberate command (fresh press / icon / script) re-arms holds.
+            anim.require_release = false;
+        }
         if let Some(cmd) = next {
             match cmd {
                 // Inventory / screen commands are instant and world-independent.
@@ -633,13 +679,27 @@ pub fn player_movement(
                         events.combat.send(PlayerAction::Attack);
                     } else {
                         *overweight_warned = false;
+                        let before = player.pos;
                         start_command(cmd, free, &mut player, &mut anim, &dungeon, &mut doors);
+                        if player.pos != before {
+                            events.se.send(crate::audio::PlaySe(crate::audio::Se::Footstep));
+                        }
+                    }
+                }
+                // A door toggle is instant; the SE fires only when a door was hit.
+                Command::ToggleDoor => {
+                    if let Some(open) = toggle_front_door(&player, &dungeon, &mut doors) {
+                        events.se.send(crate::audio::PlaySe(door_se(open)));
                     }
                 }
                 _ => {
                     *overweight_warned = false;
                     let free = matches!(*events.move_mode, MoveMode::Free);
+                    let before = player.pos;
                     start_command(cmd, free, &mut player, &mut anim, &dungeon, &mut doors);
+                    if player.pos != before {
+                        events.se.send(crate::audio::PlaySe(crate::audio::Se::Footstep));
+                    }
                 }
             }
         }

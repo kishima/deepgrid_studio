@@ -143,7 +143,7 @@ fn edit3d_sync(
         for e in &mesh_tiles {
             commands.entity(e).despawn_recursive();
         }
-        spawn_level_mesh(&mut commands, &palette, &asset_server, &mut meshes, &mut materials, &dungeon.level);
+        spawn_level_mesh(&mut commands, &palette, &mut meshes, &mut materials, &dungeon.level);
         respawn_markers(&mut commands, &state, &asset_server, &mut meshes, &mut materials, &markers);
         state.d3_terrain_dirty.clear();
         state.d3_markers_dirty = false;
